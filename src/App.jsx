@@ -22,6 +22,7 @@ import { CreatureDetailModal } from "./components/CreatureDetailModal";
 import { EditableSection } from "./components/EditableSection";
 import { LoginScreen } from "./components/LoginScreen";
 import { SearchGroupPanel } from "./components/SearchGroupPanel";
+import { SectionErrorBoundary } from "./components/SectionErrorBoundary";
 import { BadgePill, ButtonPill, MetricCard, Panel, SectionTitle } from "./components/ui";
 import {
   featuredCompanionIndices,
@@ -33,6 +34,7 @@ import { extractStructuredSuggestions } from "./lib/extractors";
 import {
   formatChallengeRating,
   getCreatureDetail,
+  importCreatureCardFromReference,
   loadCompanionCards,
   loadWildshapeCards,
 } from "./lib/srd";
@@ -232,6 +234,85 @@ function formatDate(dateValue) {
   } catch {
     return dateValue;
   }
+}
+
+function toDisplayText(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "object") {
+    return value.name || value.label || value.title || fallback;
+  }
+  return fallback;
+}
+
+function toDisplayInteger(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? Math.round(numericValue) : null;
+}
+
+function normalizeCharacterRecord(item = {}) {
+  return {
+    ...item,
+    name: toDisplayText(item.name, "Sin nombre"),
+    class_name: toDisplayText(item.class_name),
+    level: toDisplayInteger(item.level),
+    race: toDisplayText(item.race),
+    armor_class: toDisplayInteger(item.armor_class),
+    hit_points: toDisplayInteger(item.hit_points),
+    speed: toDisplayText(item.speed),
+    passive_perception: toDisplayInteger(item.passive_perception),
+    role_label: toDisplayText(item.role_label),
+    tag: toDisplayText(item.tag),
+    summary: toDisplayText(item.summary),
+    sheet_reference_url: toDisplayText(item.sheet_reference_url),
+  };
+}
+
+function normalizeSectionItem(sectionKey, item) {
+  if (sectionKey === "characters") {
+    return normalizeCharacterRecord(item);
+  }
+
+  return item;
+}
+
+function normalizeSectionItems(sectionKey, items = []) {
+  return sortByOrder(items.map((item) => normalizeSectionItem(sectionKey, item)));
+}
+
+function clampLevel(value, minimum = 1, maximum = 20) {
+  if (value === null || value === undefined || value === "") {
+    return { value: null, overflow: false };
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return { value: null, overflow: false };
+  }
+
+  const roundedValue = Math.round(numericValue);
+  return {
+    value: Math.min(maximum, Math.max(minimum, roundedValue)),
+    overflow: roundedValue > maximum,
+  };
+}
+
+function prepareCharacterForStorage(character = {}) {
+  const { value: level, overflow } = clampLevel(character.level, 1, 20);
+
+  return {
+    character: {
+      ...character,
+      level,
+    },
+    levelOverflow: overflow,
+  };
+}
+
+function getLevelOverflowMessage() {
+  return "JAJ flashaste pa. Nivel 20 y ya estamos negociando con dioses.";
 }
 
 function shouldIncludeMoonElementals(level, isMoonDruid) {
@@ -565,7 +646,8 @@ function buildDossierMarkdown(campaign, collections, journalBody) {
 async function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrder) {
   switch (sectionKey) {
     case "characters": {
-      const character = await mergeCharacterDraftWithImport(draft);
+      const mergedCharacter = await mergeCharacterDraftWithImport(draft);
+      const { character } = prepareCharacterForStorage(mergedCharacter);
       if (!character.name) {
         throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el PDF.");
       }
@@ -656,7 +738,8 @@ async function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrd
 async function buildUpdatePayload(sectionKey, draft, userId) {
   switch (sectionKey) {
     case "characters": {
-      const character = await mergeCharacterDraftWithImport(draft);
+      const mergedCharacter = await mergeCharacterDraftWithImport(draft);
+      const { character } = prepareCharacterForStorage(mergedCharacter);
       if (!character.name) {
         throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el PDF.");
       }
@@ -743,7 +826,7 @@ function getSectionConfigs() {
       fields: [
         { key: "name", label: "Nombre", required: true, placeholder: "Aryn" },
         { key: "class_name", label: "Clase", placeholder: "Druida" },
-        { key: "level", label: "Nivel", type: "number", placeholder: "6" },
+        { key: "level", label: "Nivel", type: "number", placeholder: "6", min: 1, max: 20 },
         { key: "race", label: "Raza o linaje", placeholder: "Elfo del bosque" },
         { key: "armor_class", label: "CA", type: "number", placeholder: "14" },
         { key: "hit_points", label: "PG", type: "number", placeholder: "42" },
@@ -784,48 +867,49 @@ function getSectionConfigs() {
         },
       ],
       renderDisplay: (item) => {
-        const references = getCharacterReferences(item);
+        const character = normalizeCharacterRecord(item);
+        const references = getCharacterReferences(character);
 
         return (
           <div>
             <div className="flex flex-wrap gap-2">
-              {item.class_name ? (
-                <BadgePill>{`${item.class_name}${item.level ? ` ${item.level}` : ""}`}</BadgePill>
+              {character.class_name ? (
+                <BadgePill>{`${character.class_name}${character.level ? ` ${character.level}` : ""}`}</BadgePill>
               ) : null}
-              {item.race ? <BadgePill tone="subtle">{item.race}</BadgePill> : null}
-              {item.role_label ? <BadgePill tone="subtle">{item.role_label}</BadgePill> : null}
-              {item.tag ? <BadgePill tone="subtle">{item.tag}</BadgePill> : null}
+              {character.race ? <BadgePill tone="subtle">{character.race}</BadgePill> : null}
+              {character.role_label ? <BadgePill tone="subtle">{character.role_label}</BadgePill> : null}
+              {character.tag ? <BadgePill tone="subtle">{character.tag}</BadgePill> : null}
             </div>
-            <h3 className="mt-4 font-display text-3xl text-stone-100">{item.name}</h3>
+            <h3 className="mt-4 font-display text-3xl text-stone-100">{character.name}</h3>
 
             <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {item.armor_class ? (
+              {character.armor_class ? (
                 <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
-                  CA {item.armor_class}
+                  CA {character.armor_class}
                 </div>
               ) : null}
-              {item.hit_points ? (
+              {character.hit_points ? (
                 <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
-                  PG {item.hit_points}
+                  PG {character.hit_points}
                 </div>
               ) : null}
-              {item.speed ? (
+              {character.speed ? (
                 <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
-                  {item.speed}
+                  {character.speed}
                 </div>
               ) : null}
-              {item.passive_perception ? (
+              {character.passive_perception ? (
                 <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
-                  PP {item.passive_perception}
+                  PP {character.passive_perception}
                 </div>
               ) : null}
             </div>
 
-            {(item.sheet_reference_url || references.length) ? (
+            {(character.sheet_reference_url || references.length) ? (
               <div className="mt-4 flex flex-wrap gap-3 text-sm">
-                {item.sheet_reference_url ? (
+                {character.sheet_reference_url ? (
                   <a
-                    href={item.sheet_reference_url}
+                    href={character.sheet_reference_url}
                     target="_blank"
                     rel="noreferrer"
                     className="text-amber-100 transition hover:text-amber-50"
@@ -848,7 +932,7 @@ function getSectionConfigs() {
             ) : null}
 
             <p className="mt-4 text-sm leading-relaxed text-stone-400">
-              {item.summary || "Sin nota aún."}
+              {character.summary || "Sin nota aún."}
             </p>
           </div>
         );
@@ -1041,6 +1125,9 @@ export default function App() {
   const [wildshapeCrFilter, setWildshapeCrFilter] = useState("compatible");
   const [wildshapeSortBy, setWildshapeSortBy] = useState("cr");
   const [companionCrFilter, setCompanionCrFilter] = useState("any");
+  const [creatureImportRef, setCreatureImportRef] = useState("");
+  const [creatureImportKind, setCreatureImportKind] = useState("companion");
+  const [creatureImportBusy, setCreatureImportBusy] = useState(false);
   const [wildshapeState, setWildshapeState] = useState({
     loading: true,
     error: "",
@@ -1132,6 +1219,21 @@ export default function App() {
       companionState.items.filter((creature) => matchesChallengeFilter(creature, companionCrFilter)),
     [companionCrFilter, companionState.items],
   );
+
+  function handleSectionFieldChange(sectionKey, fieldKey, nextValue) {
+    if (sectionKey === "characters" && fieldKey === "level" && Number(nextValue) > 20) {
+      setAppStatus(getLevelOverflowMessage());
+    }
+  }
+
+  function handleDruidLevelChange(nextValue) {
+    if (Number(nextValue) > 20) {
+      setAppStatus(getLevelOverflowMessage());
+    }
+
+    const { value } = clampLevel(nextValue, 2, 20);
+    setDruidLevel(value ?? 2);
+  }
 
   useEffect(() => {
     if (!supabase) {
@@ -1343,12 +1445,12 @@ export default function App() {
 
         startTransition(() => {
           setCollections({
-            characters: sortByOrder(charactersResult.data || []),
-            quests: sortByOrder(questsResult.data || []),
-            locations: sortByOrder(locationsResult.data || []),
-            knowledge: sortByOrder(knowledgeResult.data || []),
-            sessions: sortByOrder(sessionsResult.data || []),
-            inventory: sortByOrder(inventoryResult.data || []),
+            characters: normalizeSectionItems("characters", charactersResult.data || []),
+            quests: normalizeSectionItems("quests", questsResult.data || []),
+            locations: normalizeSectionItems("locations", locationsResult.data || []),
+            knowledge: normalizeSectionItems("knowledge", knowledgeResult.data || []),
+            sessions: normalizeSectionItems("sessions", sessionsResult.data || []),
+            inventory: normalizeSectionItems("inventory", inventoryResult.data || []),
             journalEntries,
             savedCreatures: (creaturesResult.data || []).map(mapSavedCreatureRow),
           });
@@ -1654,6 +1756,8 @@ export default function App() {
 
     try {
       const nextSortOrder = collections[sectionKey].length;
+      const characterLevelOverflow =
+        sectionKey === "characters" && Number(draft.level ?? 0) > 20;
       const payload = await buildInsertPayload(
         sectionKey,
         draft,
@@ -1668,10 +1772,18 @@ export default function App() {
 
       setCollections((previous) => ({
         ...previous,
-        [sectionKey]: sortByOrder([...previous[sectionKey], data]),
+        [sectionKey]: sortByOrder([
+          ...previous[sectionKey],
+          normalizeSectionItem(sectionKey, data),
+        ]),
       }));
 
-      if (sectionKey === "characters" && (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())) {
+      if (characterLevelOverflow) {
+        setAppStatus(getLevelOverflowMessage());
+      } else if (
+        sectionKey === "characters" &&
+        (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())
+      ) {
         setAppStatus(
           "Personaje guardado con importación de ficha. Revisá los campos por si el PDF dejó algo para ajustar.",
         );
@@ -1692,6 +1804,8 @@ export default function App() {
     setAppStatus("");
 
     try {
+      const characterLevelOverflow =
+        sectionKey === "characters" && Number(draft.level ?? 0) > 20;
       const payload = await buildUpdatePayload(sectionKey, draft, userId);
       const table = COLLECTION_TABLES[sectionKey];
 
@@ -1707,11 +1821,18 @@ export default function App() {
       setCollections((previous) => ({
         ...previous,
         [sectionKey]: sortByOrder(
-          previous[sectionKey].map((item) => (item.id === itemId ? data : item)),
+          previous[sectionKey].map((item) =>
+            item.id === itemId ? normalizeSectionItem(sectionKey, data) : item,
+          ),
         ),
       }));
 
-      if (sectionKey === "characters" && (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())) {
+      if (characterLevelOverflow) {
+        setAppStatus(getLevelOverflowMessage());
+      } else if (
+        sectionKey === "characters" &&
+        (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())
+      ) {
         setAppStatus(
           "Personaje actualizado con importación de ficha. Si querés, podés retocar a mano cualquier dato que el PDF no haya traído perfecto.",
         );
@@ -1922,6 +2043,30 @@ export default function App() {
       ),
     }));
     setAppStatus(usageKind === "wildshape" ? "Forma eliminada." : "Mascota eliminada.");
+  }
+
+  async function handleImportCreatureReference() {
+    if (!creatureImportRef.trim()) return;
+
+    setCreatureImportBusy(true);
+    setAppError("");
+    setAppStatus("");
+
+    try {
+      const creature = await importCreatureCardFromReference(creatureImportRef.trim());
+      await handleSaveCreature(creature, creatureImportKind);
+      setCreatureImportRef("");
+      await openCreatureDetail(creature.index);
+      setAppStatus(
+        creatureImportKind === "wildshape"
+          ? "Forma importada y guardada."
+          : "Mascota importada y guardada.",
+      );
+    } catch (error) {
+      setAppError(error.message || "No pude importar esa criatura.");
+    } finally {
+      setCreatureImportBusy(false);
+    }
   }
 
   async function openCreatureDetail(index) {
@@ -2158,7 +2303,7 @@ export default function App() {
                     min="2"
                     max="20"
                     value={druidLevel}
-                    onChange={(event) => setDruidLevel(Math.max(2, toNumber(event.target.value, 2)))}
+                    onChange={(event) => handleDruidLevelChange(event.target.value)}
                     className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
                   />
                 </label>
@@ -2207,6 +2352,39 @@ export default function App() {
                 </p>
               </div>
             </div>
+
+            <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.5)] p-4">
+              <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">
+                Importación rápida
+              </div>
+              <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_0.45fr_auto]">
+                <input
+                  value={creatureImportRef}
+                  onChange={(event) => setCreatureImportRef(event.target.value)}
+                  placeholder="Pegá un nombre, índice SRD o enlace de bestiario compatible..."
+                  className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
+                />
+                <select
+                  value={creatureImportKind}
+                  onChange={(event) => setCreatureImportKind(event.target.value)}
+                  className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+                >
+                  <option value="companion">Guardar como mascota</option>
+                  <option value="wildshape">Guardar como forma</option>
+                </select>
+                <ButtonPill
+                  onClick={handleImportCreatureReference}
+                  disabled={!creatureImportRef.trim() || creatureImportBusy}
+                  className="h-12 px-5"
+                >
+                  {creatureImportBusy ? "Importando..." : "Importar"}
+                </ButtonPill>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-stone-400">
+                Acepta nombres en español o inglés, índices SRD y enlaces estilo bestiario. También
+                intenta leer links compatibles de 5etools cuando la criatura exista en la SRD.
+              </p>
+            </div>
           </div>
         </Panel>
         <div className="grid gap-6 xl:grid-cols-2">
@@ -2215,7 +2393,7 @@ export default function App() {
               icon={Shield}
               eyebrow="Wildshape"
               title="Formas sugeridas"
-              subtitle="Buscalas por nombre y filtralas por momento de uso, CR u orden para tener a mano la mejor opción."
+              subtitle="Buscalas por nombre en toda la biblioteca SRD y filtralas por momento de uso, CR u orden para tener a mano la mejor opción."
             />
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -2301,7 +2479,7 @@ export default function App() {
               icon={PawPrint}
               eyebrow="Compañía"
               title="Mascotas y aliados"
-              subtitle="Una sección separada para criaturas compañeras, invocadas o adoptadas."
+              subtitle="Una sección separada para criaturas compañeras, invocadas o adoptadas, con importación rápida por nombre o enlace."
             />
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -2446,6 +2624,7 @@ export default function App() {
         onUpdate={(itemId, draft) => handleUpdateItem(activeTab, itemId, draft)}
         onDelete={(itemId) => handleDeleteItem(activeTab, itemId)}
         onMove={(itemId, direction) => handleMoveItem(activeTab, itemId, direction)}
+        onFieldChange={(fieldKey, value) => handleSectionFieldChange(activeTab, fieldKey, value)}
         renderDisplay={config.renderDisplay}
       />
     );
@@ -2528,7 +2707,7 @@ export default function App() {
                 <ButtonPill onClick={handleExportDossier} disabled={!selectedCampaign} className="w-full sm:w-auto">
                   Exportar
                 </ButtonPill>
-                <ButtonPill onClick={() => setBookOpen(true)} disabled={!selectedCampaign} className="w-full sm:w-auto">
+                <ButtonPill primary onClick={() => setBookOpen(true)} disabled={!selectedCampaign} className="w-full sm:w-auto">
                   Bitácora
                 </ButtonPill>
                 <ButtonPill onClick={handleSignOut} className="col-span-2 w-full sm:col-span-1 sm:w-auto">
@@ -2587,7 +2766,14 @@ export default function App() {
           <SearchGroupPanel groups={searchGroups} query={deferredSearch} />
         </div>
 
-        <div className="mt-6">{renderActiveSection()}</div>
+        <div className="mt-6">
+          <SectionErrorBoundary
+            resetKey={`${selectedCampaignId}-${activeTab}`}
+            onFallback={() => setActiveTab("dashboard")}
+          >
+            {renderActiveSection()}
+          </SectionErrorBoundary>
+        </div>
       </div>
 
       <div className="fixed inset-x-3 bottom-3 z-40 md:hidden">

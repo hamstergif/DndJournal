@@ -71,40 +71,65 @@ const alignmentTranslations = {
 const creatureNameTranslations = {
   ape: "Simio",
   "air elemental": "Elemental de aire",
+  badger: "Tejón",
+  bat: "Murciélago",
   "black bear": "Oso negro",
   "blink dog": "Perro intermitente",
+  "blood hawk": "Halcón sangriento",
   boar: "Jabalí",
   "brown bear": "Oso pardo",
+  camel: "Camello",
   cat: "Gato",
+  crab: "Cangrejo",
   crocodile: "Cocodrilo",
   "dire wolf": "Lobo terrible",
   "draft horse": "Caballo de tiro",
   "earth elemental": "Elemental de tierra",
   elk: "Alce",
   "fire elemental": "Elemental de fuego",
+  frog: "Rana",
   "giant badger": "Tejón gigante",
   "giant boar": "Jabalí gigante",
   "giant constrictor snake": "Serpiente constrictora gigante",
+  "giant crocodile": "Cocodrilo gigante",
   "giant eagle": "Águila gigante",
   "giant elk": "Alce gigante",
   "giant hyena": "Hiena gigante",
   "giant octopus": "Pulpo gigante",
   "giant owl": "Búho gigante",
+  "giant rat": "Rata gigante",
+  "giant sea horse": "Caballito de mar gigante",
   "giant spider": "Araña gigante",
   "giant toad": "Sapo gigante",
   "giant vulture": "Buitre gigante",
+  "giant weasel": "Comadreja gigante",
+  goat: "Cabra",
+  hawk: "Halcón",
+  "hunter shark": "Tiburón cazador",
+  jackal: "Chacal",
   lion: "León",
+  lizard: "Lagarto",
   mastiff: "Mastín",
+  mule: "Mula",
+  octopus: "Pulpo",
   owl: "Búho",
   panther: "Pantera",
+  "poisonous snake": "Serpiente venenosa",
+  pony: "Poni",
+  quipper: "Quíper",
   pseudodragon: "Pseudodragón",
   rat: "Rata",
   raven: "Cuervo",
+  "reef shark": "Tiburón arrecife",
   "riding horse": "Caballo de montar",
+  "sea horse": "Caballito de mar",
   sprite: "Sprite",
   tiger: "Tigre",
+  "warhorse": "Caballo de guerra",
   "water elemental": "Elemental de agua",
+  weasel: "Comadreja",
   wolf: "Lobo",
+  "giant shark": "Tiburón gigante",
 };
 
 let monsterIndexPromise = null;
@@ -317,9 +342,93 @@ async function searchMonsterIndices(query, limit = 48) {
     .map((monster) => monster.index);
 }
 
+function normalizeLookupText(value = "") {
+  let decodedValue = value;
+
+  try {
+    decodedValue = decodeURIComponent(value);
+  } catch {
+    decodedValue = value;
+  }
+
+  return normalizeText(decodedValue)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function slugifyCreatureIndex(value = "") {
+  return normalizeLookupText(value)
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function extractCreatureReferenceCandidate(reference = "") {
+  const trimmedReference = String(reference || "").trim();
+  if (!trimmedReference) return "";
+
+  try {
+    const parsedUrl = new URL(trimmedReference);
+
+    if (parsedUrl.hash) {
+      return decodeURIComponent(parsedUrl.hash.replace(/^#/, "")).split("_")[0];
+    }
+
+    if (parsedUrl.pathname.includes("/monsters/")) {
+      const segments = parsedUrl.pathname.split("/").filter(Boolean);
+      return decodeURIComponent(segments[segments.length - 1] || "");
+    }
+
+    const namedQuery = parsedUrl.searchParams.get("name") || parsedUrl.searchParams.get("monster");
+    if (namedQuery) return namedQuery;
+  } catch {
+    return trimmedReference;
+  }
+
+  return trimmedReference;
+}
+
+async function resolveCreatureIndexFromReference(reference) {
+  const response = await getMonsterIndex();
+  const candidate = extractCreatureReferenceCandidate(reference);
+  const slugCandidate = slugifyCreatureIndex(candidate);
+  const normalizedCandidate = normalizeLookupText(candidate);
+
+  const exactIndex = response.results.find((monster) => monster.index === slugCandidate);
+  if (exactIndex) return exactIndex.index;
+
+  const exactName = response.results.find((monster) => {
+    const sourceName = normalizeLookupText(monster.name);
+    const translatedName = normalizeLookupText(translateName(monster.name));
+    return sourceName === normalizedCandidate || translatedName === normalizedCandidate;
+  });
+  if (exactName) return exactName.index;
+
+  const partialMatch = response.results.find((monster) => {
+    const sourceName = normalizeLookupText(monster.name);
+    const translatedName = normalizeLookupText(translateName(monster.name));
+    return sourceName.includes(normalizedCandidate) || translatedName.includes(normalizedCandidate);
+  });
+  if (partialMatch) return partialMatch.index;
+
+  throw new Error("No encontré esa criatura en la fuente SRD compatible.");
+}
+
 export async function getCreatureDetail(index) {
   const monster = await getMonsterDetails(index);
   return mapMonsterToDetail(monster);
+}
+
+export async function importCreatureCardFromReference(reference) {
+  const trimmedReference = String(reference || "").trim();
+  if (!trimmedReference) {
+    throw new Error("Pegá un nombre, índice SRD o enlace de bestiario.");
+  }
+
+  const index = await resolveCreatureIndexFromReference(trimmedReference);
+  const monster = await getMonsterDetails(index);
+  return mapMonsterToCard(monster);
 }
 
 export async function loadWildshapeCards(
@@ -327,7 +436,7 @@ export async function loadWildshapeCards(
   { maxChallengeRating, featuredIndices, elementalIndices = [], includeElementals = false },
 ) {
   const indices = query
-    ? await searchMonsterIndices(query, 60)
+    ? await searchMonsterIndices(query, 80)
     : [...featuredIndices, ...(includeElementals ? elementalIndices : [])];
   const cards = await getMonsterCardsByIndices(indices);
 
@@ -348,11 +457,11 @@ export async function loadWildshapeCards(
 
       return first.name.localeCompare(second.name);
     })
-    .slice(0, query ? 48 : 24);
+    .slice(0, query ? 72 : 56);
 }
 
 export async function loadCompanionCards(query, featuredIndices) {
-  const indices = query ? await searchMonsterIndices(query, 48) : featuredIndices;
+  const indices = query ? await searchMonsterIndices(query, 80) : featuredIndices;
   const cards = await getMonsterCardsByIndices(indices);
 
   return cards
@@ -363,5 +472,5 @@ export async function loadCompanionCards(query, featuredIndices) {
 
       return first.name.localeCompare(second.name);
     })
-    .slice(0, query ? 36 : 24);
+    .slice(0, query ? 64 : 56);
 }

@@ -57,6 +57,9 @@ function FieldInput({ field, value, onChange }) {
       type={field.type || "text"}
       value={value ?? ""}
       onChange={(event) => onChange(field.key, event.target.value)}
+      min={field.min}
+      max={field.max}
+      step={field.step}
       className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
       placeholder={field.placeholder}
     />
@@ -78,6 +81,7 @@ export function EditableSection({
   onDelete,
   onMove,
   renderDisplay,
+  onFieldChange,
 }) {
   const [newDraft, setNewDraft] = useState(() => buildInitialDraft(fields));
   const [editingId, setEditingId] = useState("");
@@ -96,10 +100,12 @@ export function EditableSection({
   }, [editingDraft, editingId, fields, validateDraft]);
 
   const handleNewChange = (key, nextValue) => {
+    onFieldChange?.(key, nextValue);
     setNewDraft((previous) => ({ ...previous, [key]: nextValue }));
   };
 
   const handleEditChange = (key, nextValue) => {
+    onFieldChange?.(key, nextValue);
     setEditingDraft((previous) => ({ ...previous, [key]: nextValue }));
   };
 

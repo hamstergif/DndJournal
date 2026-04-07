@@ -1,6 +1,37 @@
 import React, { useMemo, useState } from "react";
-import { MailCheck, ShieldCheck, Sparkles } from "lucide-react";
-import { BadgePill, ButtonPill, Panel } from "./ui";
+import { MailCheck, PawPrint, ScrollText, ShieldCheck, Sparkles, Swords } from "lucide-react";
+import { ButtonPill, Panel } from "./ui";
+
+const FEATURE_CARDS = [
+  {
+    eyebrow: "Campañas separadas",
+    title: "Cada mesa en su propio mundo",
+    copy:
+      "Separá historias, notas, personajes y pistas por campaña para no mezclar sesiones ni spoilers.",
+    icon: ScrollText,
+  },
+  {
+    eyebrow: "Wildshape y mascotas",
+    title: "Fichas listas en combate",
+    copy:
+      "Guardá formas, mascotas y aliados con acceso rápido a CA, PG, ataques, rasgos y acciones.",
+    icon: PawPrint,
+  },
+  {
+    eyebrow: "Biblioteca viva",
+    title: "Bestiario con enlaces compatibles",
+    copy:
+      "Buscá criaturas por nombre y traelas desde referencias SRD o links de bestiario compatibles.",
+    icon: Sparkles,
+  },
+  {
+    eyebrow: "Bitácora ordenada",
+    title: "Recordá lo que importa",
+    copy:
+      "Anotaciones rápidas, secciones editables y una bitácora pensada para discutirle al DM con pruebas.",
+    icon: Swords,
+  },
+];
 
 export function LoginScreen({
   authMode,
@@ -50,54 +81,66 @@ export function LoginScreen({
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,rgba(241,191,105,0.18),transparent_28%),linear-gradient(180deg,#17110d_0%,#080604_100%)] text-stone-100">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(157,83,35,0.22),transparent_24%),radial-gradient(circle_at_80%_18%,rgba(76,55,20,0.25),transparent_20%)]" />
+    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,rgba(241,191,105,0.18),transparent_26%),linear-gradient(180deg,#17110d_0%,#080604_100%)] text-stone-100">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(157,83,35,0.22),transparent_22%),radial-gradient(circle_at_82%_20%,rgba(76,55,20,0.24),transparent_24%),linear-gradient(120deg,rgba(255,255,255,0.02),transparent_42%)]" />
 
-      <div className="relative mx-auto grid min-h-screen max-w-7xl items-center gap-10 px-4 py-6 md:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:py-10">
+      <div className="relative mx-auto grid min-h-screen max-w-7xl items-center gap-10 px-4 py-6 md:px-6 lg:grid-cols-[1.08fr_0.92fr] lg:py-10">
         <section className="space-y-8">
           <div className="inline-flex items-center gap-3 rounded-full border border-amber-200/15 bg-white/5 px-4 py-2">
-            <div className="rounded-full bg-amber-300 p-1.5 text-stone-950">
-              <Sparkles className="h-4 w-4" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-300 text-stone-950 shadow-[0_8px_30px_rgba(242,196,112,0.28)]">
+              <Swords className="h-4 w-4" />
             </div>
             <span className="text-xs uppercase tracking-[0.35em] text-amber-100/70">
               Crónica de Campaña
             </span>
           </div>
 
-          <div className="max-w-2xl">
+          <div className="max-w-3xl">
+            <div className="mb-6 flex items-center gap-4">
+              <div className="flex h-20 w-20 items-center justify-center rounded-[28px] border border-amber-200/15 bg-[radial-gradient(circle_at_top,rgba(242,196,112,0.24),transparent_55%),linear-gradient(180deg,rgba(37,25,18,0.95),rgba(16,11,8,0.92))] shadow-[0_18px_50px_rgba(0,0,0,0.35)]">
+                <div className="flex flex-col items-center justify-center">
+                  <Swords className="h-6 w-6 text-amber-100" />
+                  <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.38em] text-amber-100/80">
+                    DyD
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-xs uppercase tracking-[0.35em] text-amber-100/45">
+                La mesa ordenada del aventurero paranoico
+              </div>
+            </div>
+
             <h1 className="font-display text-5xl leading-tight text-stone-50 md:text-6xl">
-              Un journal de DyD para jugar, anotar y ordenar tu mesa.
+              La fuente de tus recuerdos, para anotar y ordenar tu mesa.
             </h1>
-            <p className="mt-5 max-w-xl text-lg leading-relaxed text-stone-300">
-              Ahora con acceso real por Supabase, confirmación por mail y una base lista para
-              persistir campañas, bitácora, criaturas y secciones editables.
+            <p className="mt-5 max-w-2xl text-lg leading-relaxed text-stone-300">
+              La herramienta pensada para que no dependas de tu &quot;buena memoria&quot; y
+              puedas discutirle a tu DM con fundamentos que te debe 5mil piezas de oro.
             </p>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <Panel className="p-5">
-              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Acceso</div>
-              <div className="mt-3 font-display text-3xl text-amber-100">Registro real</div>
-              <p className="mt-2 text-sm text-stone-400">
-                Alta por mail y contraseña con confirmación antes de entrar por primera vez.
-              </p>
-            </Panel>
+          <div className="grid gap-4 md:grid-cols-2">
+            {FEATURE_CARDS.map((card) => {
+              const Icon = card.icon;
 
-            <Panel className="p-5">
-              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Persistencia</div>
-              <div className="mt-3 font-display text-3xl text-amber-100">Supabase</div>
-              <p className="mt-2 text-sm text-stone-400">
-                Las campañas y fichas pueden pasar de local a una base real y sincronizable.
-              </p>
-            </Panel>
-
-            <Panel className="p-5">
-              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Mesa</div>
-              <div className="mt-3 font-display text-3xl text-amber-100">Todo junto</div>
-              <p className="mt-2 text-sm text-stone-400">
-                Personajes, misiones, locaciones, bitácora y criaturas en un mismo flujo.
-              </p>
-            </Panel>
+              return (
+                <Panel key={card.title} className="p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">
+                        {card.eyebrow}
+                      </div>
+                      <div className="mt-3 font-display text-3xl text-amber-100">{card.title}</div>
+                    </div>
+                    <div className="rounded-2xl border border-amber-200/10 bg-amber-300/10 p-3 text-amber-100">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed text-stone-400">{card.copy}</p>
+                </Panel>
+              );
+            })}
           </div>
         </section>
 
@@ -139,11 +182,13 @@ export function LoginScreen({
             <form onSubmit={handleSubmit} className="space-y-4">
               {mode === "signup" ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-stone-200">Nombre visible</span>
+                  <span className="mb-2 block text-sm font-medium text-stone-200">
+                    Nombre visible
+                  </span>
                   <input
                     value={formState.displayName}
                     onChange={(event) => handleChange("displayName", event.target.value)}
-                    placeholder="Aryn, Guardián del Bosque"
+                    placeholder="Aryn, guardián del bosque"
                     className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-200/30"
                   />
                 </label>
@@ -193,8 +238,8 @@ export function LoginScreen({
                   <div className="flex items-start gap-3">
                     <MailCheck className="mt-0.5 h-4 w-4" />
                     <div>
-                      Revisá <span className="font-semibold">{confirmationPendingEmail}</span> para confirmar tu cuenta.
-                      Después de abrir el link vas a poder entrar normalmente.
+                      Revisá <span className="font-semibold">{confirmationPendingEmail}</span> para
+                      confirmar tu cuenta. Después de abrir el link vas a poder entrar normalmente.
                     </div>
                   </div>
                   <div className="mt-3">
@@ -205,7 +250,12 @@ export function LoginScreen({
                 </div>
               ) : null}
 
-              <ButtonPill primary type="submit" className="w-full" disabled={!canSubmit || loading || !isConfigured}>
+              <ButtonPill
+                primary
+                type="submit"
+                className="w-full"
+                disabled={!canSubmit || loading || !isConfigured}
+              >
                 {loading
                   ? "Procesando..."
                   : mode === "signup"
@@ -225,13 +275,13 @@ export function LoginScreen({
                 <div className="mb-2 inline-flex rounded-full border border-amber-200/10 p-2 text-amber-100">
                   <ShieldCheck className="h-4 w-4" />
                 </div>
-                <div className="text-sm text-stone-200">Sesión persistente segura</div>
+                <div className="text-sm text-stone-200">Sesión segura y persistente</div>
               </div>
               <div className="rounded-2xl border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                <div className="mb-2">
-                  <BadgePill tone="success">Supabase</BadgePill>
+                <div className="mb-2 inline-flex rounded-full border border-amber-200/10 p-2 text-amber-100">
+                  <Sparkles className="h-4 w-4" />
                 </div>
-                <div className="text-sm text-stone-200">Lista para datos reales</div>
+                <div className="text-sm text-stone-200">Campañas, fichas y bitácora sincronizadas</div>
               </div>
             </div>
           </Panel>
