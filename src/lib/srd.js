@@ -23,6 +23,10 @@ const speedLabels = {
 let monsterIndexPromise = null;
 const monsterDetailsCache = new Map();
 
+function normalizeText(value = "") {
+  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 function getArmorClassValue(armorClass) {
   if (Array.isArray(armorClass)) {
     const firstEntry = armorClass[0];
@@ -39,6 +43,15 @@ function formatSpeed(speed = {}) {
 
   return entries
     .map(([key, value]) => `${speedLabels[key] || key} ${String(value).replace(/\.$/, "")}`)
+    .join(" · ");
+}
+
+function formatSenses(senses = {}) {
+  const entries = Object.entries(senses);
+  if (!entries.length) return "";
+
+  return entries
+    .map(([key, value]) => `${key.replaceAll("_", " ")} ${value}`)
     .join(" · ");
 }
 
@@ -90,8 +103,15 @@ async function getMonsterDetails(index) {
   return monsterDetailsCache.get(index);
 }
 
-function normalizeText(value = "") {
-  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+function formatDamage(action) {
+  if (!action?.damage?.length) return "";
+
+  return action.damage
+    .map((entry) => {
+      const type = entry.damage_type?.name || "";
+      return `${entry.damage_dice || ""} ${type}`.trim();
+    })
+    .join(" · ");
 }
 
 function mapMonsterToCard(monster) {
@@ -120,6 +140,34 @@ function mapMonsterToCard(monster) {
   };
 }
 
+function mapMonsterToDetail(monster) {
+  const base = mapMonsterToCard(monster);
+
+  return {
+    ...base,
+    abilityScores: {
+      strength: monster.strength,
+      dexterity: monster.dexterity,
+      constitution: monster.constitution,
+      intelligence: monster.intelligence,
+      wisdom: monster.wisdom,
+      charisma: monster.charisma,
+    },
+    senses: formatSenses(monster.senses),
+    languages: monster.languages,
+    specialAbilities: (monster.special_abilities || []).map((item) => ({
+      name: item.name,
+      desc: item.desc,
+    })),
+    actions: (monster.actions || []).map((item) => ({
+      name: item.name,
+      desc: item.desc,
+      attackBonus: item.attack_bonus ?? null,
+      damageText: formatDamage(item),
+    })),
+  };
+}
+
 async function getMonsterCardsByIndices(indices) {
   const uniqueIndices = [...new Set(indices)];
   const results = await Promise.allSettled(uniqueIndices.map((index) => getMonsterDetails(index)));
@@ -140,15 +188,17 @@ async function searchMonsterIndices(query, limit = 24) {
     .map((monster) => monster.index);
 }
 
+export async function getCreatureDetail(index) {
+  const monster = await getMonsterDetails(index);
+  return mapMonsterToDetail(monster);
+}
+
 export async function loadWildshapeCards(query, maxChallengeRating, featuredIndices) {
   const indices = query ? await searchMonsterIndices(query, 36) : featuredIndices;
   const cards = await getMonsterCardsByIndices(indices);
 
   return cards
-    .filter(
-      (creature) =>
-        creature.type === "beast" && creature.challengeValue <= maxChallengeRating,
-    )
+    .filter((creature) => creature.type === "beast" && creature.challengeValue <= maxChallengeRating)
     .sort((first, second) => {
       if (first.challengeValue !== second.challengeValue) {
         return first.challengeValue - second.challengeValue;

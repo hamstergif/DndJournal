@@ -1,14 +1,12 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
-  Castle,
-  Cloud,
+  Brain,
   Compass,
-  Crown,
-  Flame,
+  LayoutGrid,
   LogOut,
-  MapPinned,
-  Menu,
+  MapPin,
+  Package,
   PawPrint,
   ScrollText,
   Search,
@@ -17,1088 +15,2063 @@ import {
   Swords,
   Users,
 } from "lucide-react";
-import {
-  campaigns,
-  characters,
-  featuredCompanionIndices,
-  featuredTransformationIndices,
-  inventory,
-  journalPlaceholders,
-  knowledge,
-  locations,
-  navItems,
-  quests,
-  sessions,
-} from "./data";
 import { BookOverlay } from "./components/BookOverlay";
-import { CollectionSection } from "./components/CollectionSection";
 import { CreatureCard, SavedCreatureCard } from "./components/CreatureCard";
+import { CreatureDetailModal } from "./components/CreatureDetailModal";
+import { EditableSection } from "./components/EditableSection";
 import { LoginScreen } from "./components/LoginScreen";
 import { SearchGroupPanel } from "./components/SearchGroupPanel";
-import { BadgePill, ButtonPill, InfoCard, MetricCard, Panel, SectionTitle } from "./components/ui";
-import { formatChallengeRating, loadCompanionCards, loadWildshapeCards } from "./lib/srd";
+import { BadgePill, ButtonPill, MetricCard, Panel, SectionTitle } from "./components/ui";
+import { featuredCompanionIndices, featuredTransformationIndices } from "./data";
+import { extractStructuredSuggestions } from "./lib/extractors";
+import { createStarterBundle, createStarterCampaignPayload } from "./lib/seed";
+import {
+  formatChallengeRating,
+  getCreatureDetail,
+  loadCompanionCards,
+  loadWildshapeCards,
+} from "./lib/srd";
 import { downloadTextFile, readStorage, writeStorage } from "./lib/storage";
+import { getAuthRedirectUrl, isSupabaseConfigured, supabase } from "./lib/supabase";
 
-const STORAGE_KEYS = {
-  session: "dyd-journal-session-v1",
-  selectedCampaign: "dyd-journal-selected-campaign-v1",
-  notes: "dyd-journal-notes-v3",
-  savedForms: "dyd-journal-saved-forms-v1",
-  savedCompanions: "dyd-journal-saved-companions-v1",
+const SELECTED_CAMPAIGN_KEY = "dyd-selected-campaign-supabase-v1";
+
+const EMPTY_COLLECTIONS = {
+  characters: [],
+  quests: [],
+  locations: [],
+  knowledge: [],
+  sessions: [],
+  inventory: [],
+  savedCreatures: [],
+  journalEntries: [],
 };
 
-const AUTH_MODE = import.meta.env.VITE_AUTH_MODE || "local-demo";
+const NAV_ITEMS = [
+  { id: "dashboard", label: "Resumen", icon: LayoutGrid },
+  { id: "characters", label: "Personajes", icon: Users },
+  { id: "quests", label: "Misiones", icon: Swords },
+  { id: "locations", label: "Locaciones", icon: MapPin },
+  { id: "knowledge", label: "Conocimiento", icon: Brain },
+  { id: "sessions", label: "Sesiones", icon: ScrollText },
+  { id: "inventory", label: "Objetos", icon: Package },
+  { id: "creatures", label: "Mascotas y formas", icon: PawPrint },
+];
 
-const navIconMap = {
-  dashboard: Crown,
-  characters: Users,
-  quests: ScrollText,
-  locations: MapPinned,
-  knowledge: BookOpen,
-  sessions: Flame,
-  inventory: Shield,
-  creatures: PawPrint,
+const QUEST_STATUS_OPTIONS = [
+  { value: "active", label: "Activa" },
+  { value: "investigating", label: "Investigando" },
+  { value: "completed", label: "Completada" },
+  { value: "paused", label: "Pausada" },
+  { value: "failed", label: "Fallida" },
+];
+
+const KNOWLEDGE_KIND_OPTIONS = [
+  { value: "group", label: "Grupo" },
+  { value: "rumor", label: "Rumor" },
+  { value: "fact", label: "Hecho" },
+  { value: "private", label: "Privado" },
+];
+
+const COLLECTION_TABLES = {
+  characters: "characters",
+  quests: "quests",
+  locations: "locations",
+  knowledge: "knowledge_entries",
+  sessions: "session_logs",
+  inventory: "inventory_items",
 };
 
 function normalizeText(value = "") {
-  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return value
+    .toString()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
-function getDruidWildShapeMaxCR(level, isMoonDruid) {
-  const safeLevel = Number.isFinite(level) ? Math.max(2, Math.min(20, level)) : 2;
+function getCampaignStatusLabel(status) {
+  return (
+    {
+      active: "Activa",
+      paused: "Pausada",
+      finished: "Finalizada",
+      archived: "Archivada",
+    }[status] || "Activa"
+  );
+}
 
-  if (isMoonDruid) {
-    if (safeLevel >= 18) return 6;
-    if (safeLevel >= 15) return 5;
-    if (safeLevel >= 12) return 4;
-    if (safeLevel >= 9) return 3;
-    if (safeLevel >= 6) return 2;
-    return 1;
+function getQuestStatusLabel(status) {
+  return (
+    {
+      active: "Activa",
+      investigating: "Investigando",
+      completed: "Completada",
+      paused: "Pausada",
+      failed: "Fallida",
+    }[status] || "Activa"
+  );
+}
+
+function getKnowledgeKindLabel(kind) {
+  return (
+    {
+      group: "Grupo",
+      rumor: "Rumor",
+      fact: "Hecho",
+      private: "Privado",
+    }[kind] || "Grupo"
+  );
+}
+
+function getKnowledgeVisibilityLabel(item) {
+  if (item.visibility === "private") return "Solo vos";
+  return "Campana";
+}
+
+function getSuggestionKindLabel(kind) {
+  return (
+    {
+      characters: "Personaje",
+      quests: "Mision",
+      locations: "Locacion",
+      knowledge: "Conocimiento",
+      inventory: "Objeto",
+    }[kind] || "Dato"
+  );
+}
+
+function getSuggestionCreateLabel(kind) {
+  return (
+    {
+      characters: "Crear personaje",
+      quests: "Crear mision",
+      locations: "Crear locacion",
+      knowledge: "Guardar conocimiento",
+      inventory: "Guardar objeto",
+    }[kind] || "Crear"
+  );
+}
+
+function toNumber(value, fallback = 0) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function formatDate(dateValue) {
+  if (!dateValue) return "Sin fecha";
+
+  try {
+    return new Intl.DateTimeFormat("es-AR", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }).format(new Date(dateValue));
+  } catch {
+    return dateValue;
   }
+}
 
-  if (safeLevel >= 8) return 1;
-  if (safeLevel >= 4) return 0.5;
+function getMoonWildshapeMaxChallenge(level) {
+  if (level >= 18) return 6;
+  if (level >= 15) return 5;
+  if (level >= 12) return 4;
+  if (level >= 9) return 3;
+  if (level >= 6) return 2;
+  return 1;
+}
+
+function getStandardWildshapeMaxChallenge(level) {
+  if (level >= 8) return 1;
+  if (level >= 4) return 0.5;
   return 0.25;
 }
 
-function upsertCreatureEntry(collection, creature) {
-  return [
-    { ...creature, savedAt: new Date().toISOString() },
-    ...collection.filter((item) => item.index !== creature.index),
-  ].slice(0, 12);
+function getWildshapeMaxChallenge(level, isMoonDruid) {
+  return isMoonDruid
+    ? getMoonWildshapeMaxChallenge(level)
+    : getStandardWildshapeMaxChallenge(level);
+}
+
+function mapSavedCreatureRow(row) {
+  const challengeValue = row.challenge_value ?? 0;
+
+  return {
+    id: row.id,
+    index: row.source_index,
+    usageKind: row.usage_kind,
+    name: row.name,
+    type: row.creature_type || "Sin tipo",
+    size: row.size || "Sin tamano",
+    alignment: row.alignment || "",
+    armorClass: row.armor_class ?? "-",
+    hitPoints: row.hit_points ?? "-",
+    hitDice: row.hit_dice || "-",
+    speed: row.speed || "Sin movimiento",
+    challengeValue,
+    challengeLabel: row.challenge_label || formatChallengeRating(challengeValue),
+    sourceUrl: row.source_url || "",
+    imageUrl: row.image_url || "",
+    snippet: row.snippet || "Sin descripcion guardada.",
+    traits: Array.isArray(row.traits) ? row.traits : [],
+    notes: row.notes || "",
+  };
+}
+
+function sortByOrder(items) {
+  return [...items].sort((first, second) => {
+    if ((first.sort_order ?? 0) !== (second.sort_order ?? 0)) {
+      return (first.sort_order ?? 0) - (second.sort_order ?? 0);
+    }
+
+    return new Date(first.created_at || 0).getTime() - new Date(second.created_at || 0).getTime();
+  });
+}
+
+function swapItems(items, itemId, direction) {
+  const currentIndex = items.findIndex((item) => item.id === itemId);
+  if (currentIndex === -1) return items;
+
+  const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+  if (nextIndex < 0 || nextIndex >= items.length) return items;
+
+  const reordered = [...items];
+  [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
+
+  return reordered.map((item, index) => ({
+    ...item,
+    sort_order: index,
+  }));
+}
+
+function createSearchGroups(query, collections, journalBody) {
+  const normalizedQuery = normalizeText(query);
+  if (!normalizedQuery) return [];
+
+  const groups = [
+    {
+      title: "Personajes",
+      icon: Users,
+      items: collections.characters
+        .filter((item) =>
+          [item.name, item.role_label, item.tag, item.summary]
+            .filter(Boolean)
+            .some((value) => normalizeText(value).includes(normalizedQuery)),
+        )
+        .map((item) => ({
+          title: item.name,
+          badge: item.tag || "Personaje",
+          meta: item.role_label || "Sin rol",
+          text: item.summary || "Sin nota aun.",
+        })),
+    },
+    {
+      title: "Misiones",
+      icon: Swords,
+      items: collections.quests
+        .filter((item) =>
+          [item.title, item.detail, getQuestStatusLabel(item.status)]
+            .filter(Boolean)
+            .some((value) => normalizeText(value).includes(normalizedQuery)),
+        )
+        .map((item) => ({
+          title: item.title,
+          badge: getQuestStatusLabel(item.status),
+          meta: "Agenda viva",
+          text: item.detail || "Sin detalle.",
+        })),
+    },
+    {
+      title: "Locaciones",
+      icon: MapPin,
+      items: collections.locations
+        .filter((item) =>
+          [item.title, item.location_type, item.detail]
+            .filter(Boolean)
+            .some((value) => normalizeText(value).includes(normalizedQuery)),
+        )
+        .map((item) => ({
+          title: item.title,
+          badge: item.location_type || "Locacion",
+          meta: "Mapa de campana",
+          text: item.detail || "Sin detalle.",
+        })),
+    },
+    {
+      title: "Conocimiento",
+      icon: Brain,
+      items: collections.knowledge
+        .filter((item) =>
+          [item.title, item.body, getKnowledgeKindLabel(item.kind)]
+            .filter(Boolean)
+            .some((value) => normalizeText(value).includes(normalizedQuery)),
+        )
+        .map((item) => ({
+          title: item.title,
+          badge: getKnowledgeKindLabel(item.kind),
+          meta: getKnowledgeVisibilityLabel(item),
+          text: item.body || "Sin detalle.",
+        })),
+    },
+    {
+      title: "Objetos",
+      icon: Package,
+      items: collections.inventory
+        .filter((item) =>
+          [item.name, item.item_type, item.holder, item.notes]
+            .filter(Boolean)
+            .some((value) => normalizeText(value).includes(normalizedQuery)),
+        )
+        .map((item) => ({
+          title: item.name,
+          badge: item.item_type || "Objeto",
+          meta: item.holder || "Sin portador",
+          text: item.notes || "Sin detalle.",
+        })),
+    },
+    {
+      title: "Bitacora",
+      icon: BookOpen,
+      items: journalBody
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && normalizeText(line).includes(normalizedQuery))
+        .slice(0, 6)
+        .map((line, index) => ({
+          title: `Entrada ${index + 1}`,
+          badge: "Nota",
+          meta: "Bitacora principal",
+          text: line,
+        })),
+    },
+  ];
+
+  return groups.filter((group) => group.items.length);
+}
+
+function buildDossierMarkdown(campaign, collections, journalBody) {
+  const lines = [
+    `# ${campaign?.title || "Campana"}`,
+    "",
+    `- Estado: ${getCampaignStatusLabel(campaign?.status)}`,
+    `- Ambientacion: ${campaign?.setting || "Sin definir"}`,
+    `- Ultima referencia: ${campaign?.last_session_label || "Sin dato"}`,
+    "",
+    "## Resumen",
+    "",
+    campaign?.summary || "Sin resumen.",
+    "",
+    "## Foco actual",
+    "",
+    campaign?.focus || "Sin foco cargado.",
+    "",
+    "## Proximo movimiento",
+    "",
+    campaign?.next_move || "Sin siguiente paso.",
+    "",
+    "## Personajes",
+    "",
+  ];
+
+  collections.characters.forEach((item) => {
+    lines.push(`- **${item.name}** · ${item.role_label || "Sin rol"} · ${item.tag || "Sin tag"}`);
+    lines.push(`  ${item.summary || "Sin nota."}`);
+  });
+
+  lines.push("", "## Misiones", "");
+  collections.quests.forEach((item) => {
+    lines.push(`- **${item.title}** · ${getQuestStatusLabel(item.status)}`);
+    lines.push(`  ${item.detail || "Sin detalle."}`);
+  });
+
+  lines.push("", "## Locaciones", "");
+  collections.locations.forEach((item) => {
+    lines.push(`- **${item.title}** · ${item.location_type || "Sin tipo"}`);
+    lines.push(`  ${item.detail || "Sin detalle."}`);
+  });
+
+  lines.push("", "## Conocimiento", "");
+  collections.knowledge.forEach((item) => {
+    lines.push(`- **${item.title}** · ${getKnowledgeKindLabel(item.kind)} · ${getKnowledgeVisibilityLabel(item)}`);
+    lines.push(`  ${item.body || "Sin detalle."}`);
+  });
+
+  lines.push("", "## Sesiones", "");
+  collections.sessions.forEach((item) => {
+    lines.push(`- **${item.title}** · ${item.session_number ? `Sesion ${item.session_number}` : "Sin numero"}`);
+    lines.push(`  ${item.recap || "Sin recap."}`);
+  });
+
+  lines.push("", "## Inventario", "");
+  collections.inventory.forEach((item) => {
+    lines.push(`- **${item.name}** · x${item.quantity || 1} · ${item.holder || "Sin portador"}`);
+    lines.push(`  ${item.notes || item.item_type || "Sin detalle."}`);
+  });
+
+  lines.push("", "## Mascotas y formas", "");
+  collections.savedCreatures.forEach((item) => {
+    lines.push(`- **${item.name}** · ${item.usageKind === "wildshape" ? "Forma" : "Compania"} · CR ${item.challengeLabel}`);
+    lines.push(`  CA ${item.armorClass} · PG ${item.hitPoints} · ${item.speed}`);
+  });
+
+  lines.push("", "## Bitacora principal", "", journalBody || "Sin notas aun.");
+
+  return lines.join("\n");
+}
+
+function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrder) {
+  switch (sectionKey) {
+    case "characters":
+      return {
+        campaign_id: campaignId,
+        created_by: userId,
+        updated_by: userId,
+        name: draft.name?.trim(),
+        role_label: draft.role_label?.trim() || null,
+        tag: draft.tag?.trim() || null,
+        summary: draft.summary?.trim() || null,
+        sort_order: sortOrder,
+      };
+    case "quests":
+      return {
+        campaign_id: campaignId,
+        created_by: userId,
+        updated_by: userId,
+        title: draft.title?.trim(),
+        status: draft.status || "active",
+        detail: draft.detail?.trim() || null,
+        priority: 1,
+        sort_order: sortOrder,
+      };
+    case "locations":
+      return {
+        campaign_id: campaignId,
+        created_by: userId,
+        updated_by: userId,
+        title: draft.title?.trim(),
+        location_type: draft.location_type?.trim() || null,
+        detail: draft.detail?.trim() || null,
+        is_safe_haven: normalizeText(draft.location_type || "").includes("refugio"),
+        sort_order: sortOrder,
+      };
+    case "knowledge": {
+      const isPrivate = draft.kind === "private";
+      return {
+        campaign_id: campaignId,
+        created_by: userId,
+        updated_by: userId,
+        owner_user_id: isPrivate ? userId : null,
+        title: draft.title?.trim(),
+        body: draft.body?.trim() || null,
+        kind: draft.kind || "group",
+        visibility: isPrivate ? "private" : "campaign",
+        sort_order: sortOrder,
+      };
+    }
+    case "sessions":
+      return {
+        campaign_id: campaignId,
+        created_by: userId,
+        updated_by: userId,
+        title: draft.title?.trim(),
+        recap: draft.recap?.trim() || null,
+        session_number: draft.session_number ? toNumber(draft.session_number, null) : null,
+        played_on: draft.played_on || null,
+        sort_order: sortOrder,
+      };
+    case "inventory":
+      return {
+        campaign_id: campaignId,
+        created_by: userId,
+        updated_by: userId,
+        name: draft.name?.trim(),
+        item_type: draft.item_type?.trim() || null,
+        holder: draft.holder?.trim() || null,
+        quantity: Math.max(0, toNumber(draft.quantity, 1)),
+        notes: draft.notes?.trim() || null,
+        sort_order: sortOrder,
+      };
+    default:
+      return null;
+  }
+}
+
+function buildUpdatePayload(sectionKey, draft, userId) {
+  switch (sectionKey) {
+    case "characters":
+      return {
+        updated_by: userId,
+        name: draft.name?.trim(),
+        role_label: draft.role_label?.trim() || null,
+        tag: draft.tag?.trim() || null,
+        summary: draft.summary?.trim() || null,
+      };
+    case "quests":
+      return {
+        updated_by: userId,
+        title: draft.title?.trim(),
+        status: draft.status || "active",
+        detail: draft.detail?.trim() || null,
+      };
+    case "locations":
+      return {
+        updated_by: userId,
+        title: draft.title?.trim(),
+        location_type: draft.location_type?.trim() || null,
+        detail: draft.detail?.trim() || null,
+        is_safe_haven: normalizeText(draft.location_type || "").includes("refugio"),
+      };
+    case "knowledge": {
+      const isPrivate = draft.kind === "private";
+      return {
+        updated_by: userId,
+        owner_user_id: isPrivate ? userId : null,
+        title: draft.title?.trim(),
+        body: draft.body?.trim() || null,
+        kind: draft.kind || "group",
+        visibility: isPrivate ? "private" : "campaign",
+      };
+    }
+    case "sessions":
+      return {
+        updated_by: userId,
+        title: draft.title?.trim(),
+        recap: draft.recap?.trim() || null,
+        session_number: draft.session_number ? toNumber(draft.session_number, null) : null,
+        played_on: draft.played_on || null,
+      };
+    case "inventory":
+      return {
+        updated_by: userId,
+        name: draft.name?.trim(),
+        item_type: draft.item_type?.trim() || null,
+        holder: draft.holder?.trim() || null,
+        quantity: Math.max(0, toNumber(draft.quantity, 1)),
+        notes: draft.notes?.trim() || null,
+      };
+    default:
+      return null;
+  }
+}
+
+function getSectionConfigs() {
+  return {
+    characters: {
+      title: "Personajes",
+      subtitle: "Cada ficha puede editarse, ordenarse y dejar notas utiles a mano.",
+      eyebrow: "Mesa viva",
+      icon: Users,
+      emptyText: "Todavia no hay personajes cargados en esta campana.",
+      fields: [
+        { key: "name", label: "Nombre", required: true, placeholder: "Aryn" },
+        { key: "role_label", label: "Rol", placeholder: "PJ · Druida" },
+        { key: "tag", label: "Tag", placeholder: "Aliado, villano, contacto..." },
+        {
+          key: "summary",
+          label: "Nota",
+          type: "textarea",
+          placeholder: "Que necesito recordar de esta persona antes de jugar.",
+          rows: 4,
+        },
+      ],
+      renderDisplay: (item) => (
+        <div>
+          <div className="flex flex-wrap gap-2">
+            {item.role_label ? <BadgePill>{item.role_label}</BadgePill> : null}
+            {item.tag ? <BadgePill tone="subtle">{item.tag}</BadgePill> : null}
+          </div>
+          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.name}</h3>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.summary || "Sin nota aun."}</p>
+        </div>
+      ),
+    },
+    quests: {
+      title: "Misiones",
+      subtitle: "Ordena el frente activo de la mesa y deja cada objetivo con su propio contexto.",
+      eyebrow: "Agenda",
+      icon: Swords,
+      emptyText: "No hay misiones cargadas todavia.",
+      fields: [
+        { key: "title", label: "Titulo", required: true, placeholder: "Seguir el carruaje negro" },
+        { key: "status", label: "Estado", type: "select", defaultValue: "active", options: QUEST_STATUS_OPTIONS },
+        {
+          key: "detail",
+          label: "Detalle",
+          type: "textarea",
+          placeholder: "Que se sabe, que falta y por que importa.",
+          rows: 4,
+        },
+      ],
+      renderDisplay: (item) => (
+        <div>
+          <div className="flex flex-wrap gap-2">
+            <BadgePill>{getQuestStatusLabel(item.status)}</BadgePill>
+          </div>
+          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail || "Sin detalle aun."}</p>
+        </div>
+      ),
+    },
+    locations: {
+      title: "Locaciones",
+      subtitle: "Mantene cada sitio con su propia ficha para ubicar pistas y escenas rapido.",
+      eyebrow: "Mapa",
+      icon: MapPin,
+      emptyText: "No hay locaciones cargadas aun.",
+      fields: [
+        { key: "title", label: "Nombre", required: true, placeholder: "Bosque del Sauce Hueco" },
+        { key: "location_type", label: "Tipo", placeholder: "Refugio, zona, mazmorra..." },
+        {
+          key: "detail",
+          label: "Detalle",
+          type: "textarea",
+          placeholder: "Que se recuerda de este lugar, sus riesgos o su tono.",
+          rows: 4,
+        },
+      ],
+      renderDisplay: (item) => (
+        <div>
+          <div className="flex flex-wrap gap-2">
+            {item.location_type ? <BadgePill>{item.location_type}</BadgePill> : null}
+            {item.is_safe_haven ? <BadgePill tone="success">Refugio</BadgePill> : null}
+          </div>
+          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail || "Sin detalle aun."}</p>
+        </div>
+      ),
+    },
+    knowledge: {
+      title: "Conocimiento",
+      subtitle: "Rumores, verdades y notas privadas para que no se pierda lo importante.",
+      eyebrow: "Pistas",
+      icon: Brain,
+      emptyText: "Todavia no hay conocimientos guardados.",
+      fields: [
+        { key: "title", label: "Titulo", required: true, placeholder: "Melissandre sigue viva" },
+        { key: "kind", label: "Clase", type: "select", defaultValue: "group", options: KNOWLEDGE_KIND_OPTIONS },
+        {
+          key: "body",
+          label: "Detalle",
+          type: "textarea",
+          placeholder: "Que se descubrio, que tan confiable es y para quien sirve.",
+          rows: 4,
+        },
+      ],
+      renderDisplay: (item) => (
+        <div>
+          <div className="flex flex-wrap gap-2">
+            <BadgePill>{getKnowledgeKindLabel(item.kind)}</BadgePill>
+            <BadgePill tone="subtle">{getKnowledgeVisibilityLabel(item)}</BadgePill>
+          </div>
+          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.body || "Sin detalle aun."}</p>
+        </div>
+      ),
+    },
+    sessions: {
+      title: "Sesiones",
+      subtitle: "Cada recap se puede corregir y ordenar como un historial util para la campana.",
+      eyebrow: "Cronica",
+      icon: ScrollText,
+      emptyText: "No hay sesiones registradas todavia.",
+      fields: [
+        { key: "title", label: "Titulo", required: true, placeholder: "Sesion 13 · El carruaje negro" },
+        { key: "session_number", label: "Numero", type: "number", placeholder: "13" },
+        { key: "played_on", label: "Fecha", type: "date" },
+        {
+          key: "recap",
+          label: "Recap",
+          type: "textarea",
+          placeholder: "Que paso, que quedo abierto y que deberia recordar el grupo.",
+          rows: 5,
+        },
+      ],
+      renderDisplay: (item) => (
+        <div>
+          <div className="flex flex-wrap gap-2">
+            {item.session_number ? <BadgePill>Sesion {item.session_number}</BadgePill> : null}
+            {item.played_on ? <BadgePill tone="subtle">{formatDate(item.played_on)}</BadgePill> : null}
+          </div>
+          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.recap || "Sin recap aun."}</p>
+        </div>
+      ),
+    },
+    inventory: {
+      title: "Objetos",
+      subtitle: "Items, pistas fisicas y tesoros con cantidad, portador y notas cortas.",
+      eyebrow: "Inventario",
+      icon: Package,
+      emptyText: "Todavia no hay objetos guardados.",
+      fields: [
+        { key: "name", label: "Nombre", required: true, placeholder: "Llave ennegrecida" },
+        { key: "item_type", label: "Tipo", placeholder: "Mision, tesoro, pista..." },
+        { key: "holder", label: "Portador", placeholder: "Grupo, Aryn..." },
+        { key: "quantity", label: "Cantidad", type: "number", defaultValue: 1, placeholder: "1" },
+        {
+          key: "notes",
+          label: "Nota",
+          type: "textarea",
+          placeholder: "Por que importa, donde se consiguio o como se usa.",
+          rows: 4,
+        },
+      ],
+      renderDisplay: (item) => (
+        <div>
+          <div className="flex flex-wrap gap-2">
+            {item.item_type ? <BadgePill>{item.item_type}</BadgePill> : null}
+            {item.holder ? <BadgePill tone="subtle">{item.holder}</BadgePill> : null}
+            <BadgePill tone="subtle">x{item.quantity || 1}</BadgePill>
+          </div>
+          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.name}</h3>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.notes || "Sin nota aun."}</p>
+        </div>
+      ),
+    },
+  };
 }
 
 export default function App() {
-  const [session, setSession] = useState(() => readStorage(STORAGE_KEYS.session, null));
-  const [selectedCampaignId, setSelectedCampaignId] = useState(() => {
-    const savedId = readStorage(STORAGE_KEYS.selectedCampaign, campaigns[0].id);
-    return campaigns.some((campaign) => campaign.id === savedId) ? savedId : campaigns[0].id;
-  });
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const [authStatus, setAuthStatus] = useState("");
+  const [confirmationPendingEmail, setConfirmationPendingEmail] = useState("");
+
+  const [appLoading, setAppLoading] = useState(true);
+  const [appError, setAppError] = useState("");
+  const [busySectionKey, setBusySectionKey] = useState("");
+  const [busySuggestionId, setBusySuggestionId] = useState("");
+
+  const [campaigns, setCampaigns] = useState([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState(() =>
+    readStorage(SELECTED_CAMPAIGN_KEY, ""),
+  );
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [bookOpen, setBookOpen] = useState(false);
-  const [notesByCampaign, setNotesByCampaign] = useState(() => readStorage(STORAGE_KEYS.notes, {}));
-  const [saveMessage, setSaveMessage] = useState("Autoguardado listo en este dispositivo");
-  const [druidLevel, setDruidLevel] = useState(10);
+
+  const [collections, setCollections] = useState(EMPTY_COLLECTIONS);
+  const [mainJournalEntryId, setMainJournalEntryId] = useState("");
+  const [journalBody, setJournalBody] = useState("");
+  const [saveMessage, setSaveMessage] = useState("Los cambios de bitacora se guardan solos.");
+  const [noteDirty, setNoteDirty] = useState(false);
+
+  const [druidLevel, setDruidLevel] = useState(6);
   const [isMoonDruid, setIsMoonDruid] = useState(true);
   const [wildshapeSearch, setWildshapeSearch] = useState("");
   const [companionSearch, setCompanionSearch] = useState("");
-  const [wildshapeState, setWildshapeState] = useState({ loading: false, error: "", items: [] });
-  const [companionState, setCompanionState] = useState({ loading: false, error: "", items: [] });
-  const [savedForms, setSavedForms] = useState(() => readStorage(STORAGE_KEYS.savedForms, []));
-  const [savedCompanions, setSavedCompanions] = useState(() =>
-    readStorage(STORAGE_KEYS.savedCompanions, []),
+  const [wildshapeState, setWildshapeState] = useState({
+    loading: true,
+    error: "",
+    items: [],
+  });
+  const [companionState, setCompanionState] = useState({
+    loading: true,
+    error: "",
+    items: [],
+  });
+
+  const [creatureDetailState, setCreatureDetailState] = useState({
+    creature: null,
+    loading: false,
+    error: "",
+  });
+
+  const sectionConfigs = useMemo(() => getSectionConfigs(), []);
+  const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) || null;
+  const userId = session?.user?.id || "";
+  const wildshapeMaxChallenge = getWildshapeMaxChallenge(druidLevel, isMoonDruid);
+
+  const suggestionItems = useMemo(
+    () =>
+      extractStructuredSuggestions(journalBody, {
+        characters: collections.characters,
+        quests: collections.quests,
+        locations: collections.locations,
+        knowledge: collections.knowledge,
+        inventory: collections.inventory,
+      }),
+    [
+      collections.characters,
+      collections.inventory,
+      collections.knowledge,
+      collections.locations,
+      collections.quests,
+      journalBody,
+    ],
   );
-  const [systemMessage, setSystemMessage] = useState("Panel listo para la próxima sesión");
 
-  const selectedCampaign =
-    campaigns.find((campaign) => campaign.id === selectedCampaignId) || campaigns[0];
-  const currentNotes = notesByCampaign[selectedCampaign.id] ?? "";
-  const maxWildShapeCR = getDruidWildShapeMaxCR(druidLevel, isMoonDruid);
+  const searchGroups = useMemo(
+    () => createSearchGroups(deferredSearch, collections, journalBody),
+    [collections, deferredSearch, journalBody],
+  );
 
-  useEffect(() => writeStorage(STORAGE_KEYS.session, session), [session]);
-  useEffect(() => writeStorage(STORAGE_KEYS.selectedCampaign, selectedCampaignId), [selectedCampaignId]);
-  useEffect(() => writeStorage(STORAGE_KEYS.savedForms, savedForms), [savedForms]);
-  useEffect(() => writeStorage(STORAGE_KEYS.savedCompanions, savedCompanions), [savedCompanions]);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      writeStorage(STORAGE_KEYS.notes, notesByCampaign);
-      setSaveMessage("Guardado en este dispositivo");
-    }, 450);
-
-    return () => window.clearTimeout(timeout);
-  }, [notesByCampaign]);
+  const savedWildshapes = useMemo(
+    () => collections.savedCreatures.filter((item) => item.usageKind === "wildshape"),
+    [collections.savedCreatures],
+  );
+  const savedCompanions = useMemo(
+    () => collections.savedCreatures.filter((item) => item.usageKind !== "wildshape"),
+    [collections.savedCreatures],
+  );
 
   useEffect(() => {
-    let cancelled = false;
-    setWildshapeState((previous) => ({ ...previous, loading: true, error: "" }));
+    if (!supabase) {
+      setAuthLoading(false);
+      return undefined;
+    }
 
-    loadWildshapeCards(wildshapeSearch, maxWildShapeCR, featuredTransformationIndices)
-      .then((items) => {
-        if (!cancelled) setWildshapeState({ loading: false, error: "", items });
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setWildshapeState({
-            loading: false,
-            error: "No pude conectar con la fuente SRD para las transformaciones.",
-            items: [],
-          });
+    let mounted = true;
+
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!mounted) return;
+
+        if (error) {
+          setAuthError(error.message);
         }
+
+        setSession(data.session ?? null);
+        setAuthLoading(false);
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        setAuthError(error.message || "No pude revisar la sesion actual.");
+        setAuthLoading(false);
       });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession ?? null);
+
+      if (event === "SIGNED_OUT") {
+        setCampaigns([]);
+        setCollections(EMPTY_COLLECTIONS);
+        setSelectedCampaignId("");
+        setMainJournalEntryId("");
+        setJournalBody("");
+        writeStorage(SELECTED_CAMPAIGN_KEY, null);
+      }
+
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        setAuthError("");
+        setConfirmationPendingEmail("");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCampaignId) {
+      writeStorage(SELECTED_CAMPAIGN_KEY, null);
+      return;
+    }
+
+    writeStorage(SELECTED_CAMPAIGN_KEY, selectedCampaignId);
+  }, [selectedCampaignId]);
+
+  useEffect(() => {
+    if (!session || !supabase) {
+      setAppLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCampaigns() {
+      setAppLoading(true);
+      setAppError("");
+
+      try {
+        const { data: existingCampaigns, error: campaignsError } = await supabase
+          .from("campaigns")
+          .select("*")
+          .order("updated_at", { ascending: false });
+
+        if (campaignsError) throw campaignsError;
+
+        let nextCampaigns = existingCampaigns || [];
+
+        if (!nextCampaigns.length) {
+          const starterCampaignPayload = createStarterCampaignPayload(session.user.id);
+          const { data: insertedCampaign, error: insertCampaignError } = await supabase
+            .from("campaigns")
+            .insert(starterCampaignPayload)
+            .select("*")
+            .single();
+
+          if (insertCampaignError) throw insertCampaignError;
+
+          const starterBundle = createStarterBundle(insertedCampaign.id, session.user.id);
+          await Promise.all(
+            Object.entries(starterBundle).map(([table, rows]) =>
+              rows.length ? supabase.from(table).insert(rows) : Promise.resolve(),
+            ),
+          );
+
+          nextCampaigns = [insertedCampaign];
+        }
+
+        if (cancelled) return;
+
+        const storedSelection = readStorage(SELECTED_CAMPAIGN_KEY, "");
+        const nextSelection =
+          nextCampaigns.find((campaign) => campaign.id === storedSelection)?.id || nextCampaigns[0]?.id || "";
+
+        startTransition(() => {
+          setCampaigns(nextCampaigns);
+          setSelectedCampaignId(nextSelection);
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setAppError(error.message || "No pude cargar las campanas.");
+        }
+      } finally {
+        if (!cancelled) {
+          setAppLoading(false);
+        }
+      }
+    }
+
+    loadCampaigns();
 
     return () => {
       cancelled = true;
     };
-  }, [wildshapeSearch, maxWildShapeCR]);
+  }, [session]);
 
   useEffect(() => {
-    let cancelled = false;
-    setCompanionState((previous) => ({ ...previous, loading: true, error: "" }));
+    if (!session || !selectedCampaignId || !supabase) return;
 
-    loadCompanionCards(companionSearch, featuredCompanionIndices)
-      .then((items) => {
-        if (!cancelled) setCompanionState({ loading: false, error: "", items });
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setCompanionState({
-            loading: false,
-            error: "No pude conectar con la fuente SRD para mascotas o criaturas aliadas.",
-            items: [],
-          });
+    let cancelled = false;
+
+    async function loadCampaignBundle() {
+      setAppLoading(true);
+      setAppError("");
+
+      try {
+        const [
+          charactersResult,
+          questsResult,
+          locationsResult,
+          knowledgeResult,
+          sessionsResult,
+          inventoryResult,
+          journalResult,
+          creaturesResult,
+        ] = await Promise.all([
+          supabase.from("characters").select("*").eq("campaign_id", selectedCampaignId).order("sort_order"),
+          supabase.from("quests").select("*").eq("campaign_id", selectedCampaignId).order("sort_order"),
+          supabase.from("locations").select("*").eq("campaign_id", selectedCampaignId).order("sort_order"),
+          supabase
+            .from("knowledge_entries")
+            .select("*")
+            .eq("campaign_id", selectedCampaignId)
+            .order("sort_order"),
+          supabase.from("session_logs").select("*").eq("campaign_id", selectedCampaignId).order("sort_order"),
+          supabase.from("inventory_items").select("*").eq("campaign_id", selectedCampaignId).order("sort_order"),
+          supabase
+            .from("journal_entries")
+            .select("*")
+            .eq("campaign_id", selectedCampaignId)
+            .eq("entry_type", "note")
+            .order("is_pinned", { ascending: false })
+            .order("sort_order"),
+          supabase
+            .from("saved_creatures")
+            .select("*")
+            .eq("campaign_id", selectedCampaignId)
+            .order("created_at", { ascending: false }),
+        ]);
+
+        const results = [
+          charactersResult,
+          questsResult,
+          locationsResult,
+          knowledgeResult,
+          sessionsResult,
+          inventoryResult,
+          journalResult,
+          creaturesResult,
+        ];
+
+        const firstError = results.find((result) => result.error)?.error;
+        if (firstError) throw firstError;
+
+        let journalEntries = journalResult.data || [];
+
+        if (!journalEntries.length) {
+          const { data: createdNote, error: createNoteError } = await supabase
+            .from("journal_entries")
+            .insert({
+              campaign_id: selectedCampaignId,
+              authored_by: session.user.id,
+              updated_by: session.user.id,
+              title: "Bitacora principal",
+              body: "",
+              entry_type: "note",
+              is_pinned: true,
+              sort_order: 0,
+            })
+            .select("*")
+            .single();
+
+          if (createNoteError) throw createNoteError;
+          journalEntries = [createdNote];
         }
-      });
+
+        if (cancelled) return;
+
+        const mainEntry = journalEntries[0] || null;
+
+        startTransition(() => {
+          setCollections({
+            characters: sortByOrder(charactersResult.data || []),
+            quests: sortByOrder(questsResult.data || []),
+            locations: sortByOrder(locationsResult.data || []),
+            knowledge: sortByOrder(knowledgeResult.data || []),
+            sessions: sortByOrder(sessionsResult.data || []),
+            inventory: sortByOrder(inventoryResult.data || []),
+            journalEntries,
+            savedCreatures: (creaturesResult.data || []).map(mapSavedCreatureRow),
+          });
+          setMainJournalEntryId(mainEntry?.id || "");
+          setJournalBody(mainEntry?.body || "");
+          setSaveMessage("Los cambios de bitacora se guardan solos.");
+          setNoteDirty(false);
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setAppError(error.message || "No pude cargar los datos de la campana.");
+        }
+      } finally {
+        if (!cancelled) {
+          setAppLoading(false);
+        }
+      }
+    }
+
+    loadCampaignBundle();
 
     return () => {
       cancelled = true;
     };
-  }, [companionSearch]);
+  }, [selectedCampaignId, session]);
 
-  const filteredSections = useMemo(() => {
-    const q = normalizeText(search.trim());
-    if (!q) return { characters, quests, locations, knowledge, sessions, inventory };
+  useEffect(() => {
+    if (!noteDirty || !mainJournalEntryId || !supabase || !session) return undefined;
 
-    const matches = (value) => normalizeText(value).includes(q);
+    setSaveMessage("Guardando bitacora...");
 
-    return {
-      characters: characters.filter((item) => matches(`${item.name} ${item.role} ${item.note} ${item.tag}`)),
-      quests: quests.filter((item) => matches(`${item.title} ${item.status} ${item.detail}`)),
-      locations: locations.filter((item) => matches(`${item.title} ${item.type} ${item.detail}`)),
-      knowledge: knowledge.filter((item) => matches(`${item.title} ${item.text} ${item.kind}`)),
-      sessions: sessions.filter((item) => matches(`${item.title} ${item.detail}`)),
-      inventory: inventory.filter((item) => matches(`${item.name} ${item.meta} ${item.holder}`)),
+    const timeoutId = window.setTimeout(async () => {
+      const { error } = await supabase
+        .from("journal_entries")
+        .update({
+          body: journalBody,
+          updated_by: session.user.id,
+        })
+        .eq("id", mainJournalEntryId);
+
+      if (error) {
+        setSaveMessage("No pude guardar la bitacora.");
+        return;
+      }
+
+      setCollections((previous) => ({
+        ...previous,
+        journalEntries: previous.journalEntries.map((entry) =>
+          entry.id === mainJournalEntryId ? { ...entry, body: journalBody } : entry,
+        ),
+      }));
+      setNoteDirty(false);
+      setSaveMessage("Bitacora guardada.");
+    }, 900);
+
+    return () => {
+      window.clearTimeout(timeoutId);
     };
-  }, [search]);
+  }, [journalBody, mainJournalEntryId, noteDirty, session]);
 
-  const globalSearchGroups = useMemo(() => {
-    const q = normalizeText(search.trim());
-    if (!q) return [];
+  useEffect(() => {
+    let cancelled = false;
 
-    const noteItems = currentNotes
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .filter((line) => normalizeText(line).includes(q))
-      .slice(0, 3)
-      .map((line, index) => ({
-        title: `Entrada ${index + 1}`,
-        meta: selectedCampaign.name,
-        text: line,
+    async function loadCreatureLibrary() {
+      setWildshapeState((previous) => ({ ...previous, loading: true, error: "" }));
+      setCompanionState((previous) => ({ ...previous, loading: true, error: "" }));
+
+      try {
+        const [wildshapeItems, companionItems] = await Promise.all([
+          loadWildshapeCards(
+            wildshapeSearch.trim(),
+            wildshapeMaxChallenge,
+            featuredTransformationIndices,
+          ),
+          loadCompanionCards(companionSearch.trim(), featuredCompanionIndices),
+        ]);
+
+        if (cancelled) return;
+
+        setWildshapeState({
+          loading: false,
+          error: "",
+          items: wildshapeItems,
+        });
+        setCompanionState({
+          loading: false,
+          error: "",
+          items: companionItems,
+        });
+      } catch (error) {
+        if (cancelled) return;
+
+        setWildshapeState((previous) => ({
+          ...previous,
+          loading: false,
+          error: error.message || "No pude cargar las formas.",
+        }));
+        setCompanionState((previous) => ({
+          ...previous,
+          loading: false,
+          error: error.message || "No pude cargar las criaturas.",
+        }));
+      }
+    }
+
+    loadCreatureLibrary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [companionSearch, wildshapeMaxChallenge, wildshapeSearch]);
+
+  async function handleSignIn({ email, password }) {
+    if (!supabase) return;
+
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthStatus("");
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setAuthError(error.message);
+    } else {
+      setAuthStatus("Sesion iniciada. Cargando tu campana...");
+    }
+
+    setAuthLoading(false);
+  }
+
+  async function handleSignUp({ displayName, email, password }) {
+    if (!supabase) return;
+
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthStatus("");
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: getAuthRedirectUrl(),
+        data: {
+          display_name: displayName,
+        },
+      },
+    });
+
+    if (error) {
+      setAuthError(error.message);
+      setAuthLoading(false);
+      return;
+    }
+
+    if (!data.session) {
+      setConfirmationPendingEmail(email);
+      setAuthStatus("Te mandamos un mail de confirmacion para activar la cuenta.");
+    } else {
+      setAuthStatus("Cuenta creada. Cargando tu espacio...");
+    }
+
+    setAuthLoading(false);
+  }
+
+  async function handleResendConfirmation(email) {
+    if (!supabase) return;
+
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthStatus("");
+
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email,
+      options: {
+        emailRedirectTo: getAuthRedirectUrl(),
+      },
+    });
+
+    if (error) {
+      setAuthError(error.message);
+    } else {
+      setAuthStatus(`Reenvie el correo de confirmacion a ${email}.`);
+    }
+
+    setAuthLoading(false);
+  }
+
+  async function handleSignOut() {
+    if (!supabase) return;
+
+    await supabase.auth.signOut();
+  }
+
+  async function persistOrder(sectionKey, nextItems) {
+    const table = COLLECTION_TABLES[sectionKey];
+    if (!table || !supabase) return;
+
+    await Promise.all(
+      nextItems.map((item, index) =>
+        supabase.from(table).update({ sort_order: index }).eq("id", item.id),
+      ),
+    );
+  }
+
+  async function handleCreateItem(sectionKey, draft) {
+    if (!selectedCampaignId || !supabase || !userId) return;
+
+    setBusySectionKey(sectionKey);
+    setAppError("");
+
+    try {
+      const nextSortOrder = collections[sectionKey].length;
+      const payload = buildInsertPayload(sectionKey, draft, selectedCampaignId, userId, nextSortOrder);
+      const table = COLLECTION_TABLES[sectionKey];
+
+      const { data, error } = await supabase.from(table).insert(payload).select("*").single();
+      if (error) throw error;
+
+      setCollections((previous) => ({
+        ...previous,
+        [sectionKey]: sortByOrder([...previous[sectionKey], data]),
+      }));
+    } catch (error) {
+      setAppError(error.message || "No pude crear ese registro.");
+      throw error;
+    } finally {
+      setBusySectionKey("");
+    }
+  }
+
+  async function handleUpdateItem(sectionKey, itemId, draft) {
+    if (!supabase || !userId) return;
+
+    setBusySectionKey(sectionKey);
+    setAppError("");
+
+    try {
+      const payload = buildUpdatePayload(sectionKey, draft, userId);
+      const table = COLLECTION_TABLES[sectionKey];
+
+      const { data, error } = await supabase
+        .from(table)
+        .update(payload)
+        .eq("id", itemId)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      setCollections((previous) => ({
+        ...previous,
+        [sectionKey]: sortByOrder(
+          previous[sectionKey].map((item) => (item.id === itemId ? data : item)),
+        ),
+      }));
+    } catch (error) {
+      setAppError(error.message || "No pude guardar los cambios.");
+      throw error;
+    } finally {
+      setBusySectionKey("");
+    }
+  }
+
+  async function handleDeleteItem(sectionKey, itemId) {
+    if (!supabase) return;
+
+    setBusySectionKey(sectionKey);
+    setAppError("");
+
+    try {
+      const table = COLLECTION_TABLES[sectionKey];
+      const { error } = await supabase.from(table).delete().eq("id", itemId);
+      if (error) throw error;
+
+      const remainingItems = collections[sectionKey]
+        .filter((item) => item.id !== itemId)
+        .map((item, index) => ({
+          ...item,
+          sort_order: index,
+        }));
+
+      setCollections((previous) => ({
+        ...previous,
+        [sectionKey]: remainingItems,
       }));
 
-    return [
-      {
-        title: "Personajes",
-        icon: Users,
-        items: filteredSections.characters.slice(0, 3).map((item) => ({
-          title: item.name,
-          meta: item.role,
-          badge: item.tag,
-          text: item.note,
-        })),
-      },
-      {
-        title: "Misiones",
-        icon: ScrollText,
-        items: filteredSections.quests.slice(0, 3).map((item) => ({
-          title: item.title,
-          meta: "Misión",
-          badge: item.status,
-          text: item.detail,
-        })),
-      },
-      {
-        title: "Locaciones",
-        icon: MapPinned,
-        items: filteredSections.locations.slice(0, 3).map((item) => ({
-          title: item.title,
-          meta: item.type,
-          badge: "Mapa",
-          text: item.detail,
-        })),
-      },
-      { title: "Bitácora", icon: BookOpen, items: noteItems },
-      {
-        title: "Sesiones",
-        icon: Flame,
-        items: filteredSections.sessions.slice(0, 3).map((item) => ({
-          title: item.title,
-          meta: "Recap",
-          badge: "Sesión",
-          text: item.detail,
-        })),
-      },
-      {
-        title: "Objetos",
-        icon: Shield,
-        items: filteredSections.inventory.slice(0, 3).map((item) => ({
-          title: item.name,
-          meta: item.holder,
-          badge: item.meta,
-          text: `Poseedor actual: ${item.holder}.`,
-        })),
-      },
-    ].filter((group) => group.items.length);
-  }, [currentNotes, filteredSections, search, selectedCampaign.name]);
+      await persistOrder(sectionKey, remainingItems);
+    } catch (error) {
+      setAppError(error.message || "No pude eliminar ese registro.");
+    } finally {
+      setBusySectionKey("");
+    }
+  }
 
-  const notesPreview = currentNotes.trim()
-    ? currentNotes.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 2)
-    : journalPlaceholders[selectedCampaign.id]?.slice(0, 2) || [];
+  async function handleMoveItem(sectionKey, itemId, direction) {
+    if (!supabase) return;
 
-  const navItemsWithIcons = navItems.map((item) => ({ ...item, icon: navIconMap[item.id] }));
+    setBusySectionKey(sectionKey);
+    setAppError("");
 
-  const handleLogin = ({ email }) => {
-    const prettyName = email
-      .split("@")[0]
-      .replace(/[._-]/g, " ")
-      .split(" ")
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(" ");
+    const currentItems = collections[sectionKey];
+    const nextItems = swapItems(currentItems, itemId, direction);
 
-    setSession({
-      email,
-      name: prettyName || "Aventurero",
-      provider: "credentials",
-      mode: AUTH_MODE,
-      createdAt: new Date().toISOString(),
+    if (nextItems === currentItems) {
+      setBusySectionKey("");
+      return;
+    }
+
+    setCollections((previous) => ({
+      ...previous,
+      [sectionKey]: nextItems,
+    }));
+
+    try {
+      await persistOrder(sectionKey, nextItems);
+    } catch (error) {
+      setAppError(error.message || "No pude reordenar la seccion.");
+      setCollections((previous) => ({
+        ...previous,
+        [sectionKey]: currentItems,
+      }));
+    } finally {
+      setBusySectionKey("");
+    }
+  }
+
+  async function handleApplySuggestion(suggestion) {
+    setBusySuggestionId(suggestion.id);
+    setAppError("");
+
+    try {
+      switch (suggestion.kind) {
+        case "characters":
+          await handleCreateItem("characters", {
+            name: suggestion.title,
+            role_label: "Detectado en bitacora",
+            tag: "Sugerencia",
+            summary: suggestion.detail,
+          });
+          break;
+        case "quests":
+          await handleCreateItem("quests", {
+            title: suggestion.title,
+            status: "investigating",
+            detail: suggestion.detail,
+          });
+          break;
+        case "locations":
+          await handleCreateItem("locations", {
+            title: suggestion.title,
+            location_type: "Detectada en bitacora",
+            detail: suggestion.detail,
+          });
+          break;
+        case "knowledge":
+          await handleCreateItem("knowledge", {
+            title: suggestion.title,
+            kind: "group",
+            body: suggestion.detail,
+          });
+          break;
+        case "inventory":
+          await handleCreateItem("inventory", {
+            name: suggestion.title,
+            item_type: "Detectado en bitacora",
+            holder: "Grupo",
+            quantity: 1,
+            notes: suggestion.detail,
+          });
+          break;
+        default:
+          break;
+      }
+    } finally {
+      setBusySuggestionId("");
+    }
+  }
+
+  async function handleSaveCreature(creature, usageKind) {
+    if (!supabase || !selectedCampaignId || !userId) return;
+
+    setAppError("");
+
+    const payload = {
+      campaign_id: selectedCampaignId,
+      user_id: userId,
+      usage_kind: usageKind,
+      source_system: "srd_2014",
+      source_index: creature.index,
+      name: creature.name,
+      creature_type: creature.type,
+      size: creature.size,
+      challenge_value: creature.challengeValue,
+      challenge_label: creature.challengeLabel,
+      armor_class: creature.armorClass,
+      hit_points: creature.hitPoints,
+      hit_dice: creature.hitDice,
+      speed: creature.speed,
+      alignment: creature.alignment,
+      image_url: creature.imageUrl,
+      source_url: creature.sourceUrl,
+      snippet: creature.snippet,
+      traits: creature.traits,
+      notes: "",
+      is_favorite: true,
+    };
+
+    const { data, error } = await supabase
+      .from("saved_creatures")
+      .upsert(payload, {
+        onConflict: "campaign_id,user_id,usage_kind,source_system,source_index",
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      setAppError(error.message || "No pude guardar la criatura.");
+      return;
+    }
+
+    setCollections((previous) => {
+      const nextRow = mapSavedCreatureRow(data);
+      const filtered = previous.savedCreatures.filter(
+        (item) => !(item.index === nextRow.index && item.usageKind === nextRow.usageKind),
+      );
+
+      return {
+        ...previous,
+        savedCreatures: [nextRow, ...filtered],
+      };
     });
-  };
+  }
 
-  const handleExportDossier = () => {
-    const lines = [
-      `# ${selectedCampaign.name}`,
-      "",
-      `Estado: ${selectedCampaign.status}`,
-      `Ambientación: ${selectedCampaign.setting}`,
-      `Última sesión: ${selectedCampaign.lastSession}`,
-      "",
-      "## Resumen",
-      selectedCampaign.summary,
-      "",
-      "## Foco actual",
-      selectedCampaign.focus,
-      "",
-      "## Próximo paso",
-      selectedCampaign.nextMove,
-      "",
-      "## Personajes",
-      ...characters.map((item) => `- ${item.name} (${item.role}): ${item.note}`),
-      "",
-      "## Misiones",
-      ...quests.map((item) => `- ${item.title} [${item.status}]: ${item.detail}`),
-      "",
-      "## Locaciones",
-      ...locations.map((item) => `- ${item.title} (${item.type}): ${item.detail}`),
-      "",
-      "## Objetos",
-      ...inventory.map((item) => `- ${item.name} (${item.meta}) · ${item.holder}`),
-      "",
-      "## Formas guardadas",
-      ...(savedForms.length
-        ? savedForms.map((creature) => `- ${creature.name} · CR ${creature.challengeLabel}`)
-        : ["- Sin formas guardadas todavía."]),
-      "",
-      "## Mascotas guardadas",
-      ...(savedCompanions.length
-        ? savedCompanions.map((creature) => `- ${creature.name} · ${creature.type}`)
-        : ["- Sin criaturas guardadas todavía."]),
-      "",
-      "## Bitácora",
-      currentNotes.trim() || "Sin notas cargadas aún.",
-    ];
+  async function handleRemoveSavedCreature(usageKind, creatureIndex) {
+    if (!supabase || !selectedCampaignId || !userId) return;
 
-    const safeName = selectedCampaign.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "");
+    const { error } = await supabase
+      .from("saved_creatures")
+      .delete()
+      .eq("campaign_id", selectedCampaignId)
+      .eq("user_id", userId)
+      .eq("usage_kind", usageKind)
+      .eq("source_index", creatureIndex);
 
-    downloadTextFile(`${safeName || "campaign"}-dossier.md`, lines.join("\n"));
-    setSystemMessage("Dossier exportado");
-  };
+    if (error) {
+      setAppError(error.message || "No pude quitar la criatura guardada.");
+      return;
+    }
 
-  const handleCampaignChange = (campaignId) => {
-    setSelectedCampaignId(campaignId);
-    setMobileOpen(false);
-    setSaveMessage("Bitácora lista para esta campaña");
-    setSystemMessage("Campaña cambiada");
-  };
+    setCollections((previous) => ({
+      ...previous,
+      savedCreatures: previous.savedCreatures.filter(
+        (item) => !(item.index === creatureIndex && item.usageKind === usageKind),
+      ),
+    }));
+  }
 
-  const sidebar = (
-    <div className="flex h-full flex-col gap-4">
-      <Panel className="p-5">
-        <div className="mb-4 flex items-center gap-3">
-          <div className="rounded-2xl bg-[radial-gradient(circle_at_top,#f2ca7f,#b96d2d)] p-2 text-stone-950 shadow-lg shadow-amber-700/20">
-            <Sparkles className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-[0.35em] text-amber-100/55">Bitácora</div>
-            <div className="font-display text-2xl text-stone-100">Crónica de Campaña</div>
-          </div>
-        </div>
+  async function openCreatureDetail(index) {
+    setCreatureDetailState({
+      creature: null,
+      loading: true,
+      error: "",
+    });
 
-        <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4">
-          <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">Sesión</div>
-          <div className="mt-3 text-sm text-stone-300">{session?.name} · modo {session?.mode}</div>
-          <div className="mt-2 text-xs leading-relaxed text-stone-500">
-            Guardado local activo, estructura lista para conectar autenticación y nube.
-          </div>
-        </div>
-      </Panel>
+    try {
+      const creature = await getCreatureDetail(index);
+      setCreatureDetailState({
+        creature,
+        loading: false,
+        error: "",
+      });
+    } catch (error) {
+      setCreatureDetailState({
+        creature: null,
+        loading: false,
+        error: error.message || "No pude abrir la ficha de la criatura.",
+      });
+    }
+  }
 
-      <Panel className="p-4">
-        <div className="mb-3 px-2 text-xs uppercase tracking-[0.3em] text-stone-500">Campañas</div>
-        <div className="space-y-2">
-          {campaigns.map((campaign) => (
-            <button
-              key={campaign.id}
-              type="button"
-              onClick={() => handleCampaignChange(campaign.id)}
-              className={`w-full rounded-[22px] border px-4 py-4 text-left transition ${
-                selectedCampaign.id === campaign.id
-                  ? "border-amber-200/25 bg-amber-300/10"
-                  : "border-white/5 bg-white/[0.02] hover:bg-white/[0.05]"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-medium text-stone-100">{campaign.name}</div>
-                  <div className="mt-1 text-xs text-stone-400">{campaign.setting}</div>
-                </div>
-                <BadgePill tone={campaign.status === "Activa" ? "success" : "subtle"}>
-                  {campaign.status}
-                </BadgePill>
+  function handleExportDossier() {
+    const filename = `${normalizeText(selectedCampaign?.title || "campana").replace(/\s+/g, "-") || "campana"}.md`;
+    const markdown = buildDossierMarkdown(selectedCampaign, collections, journalBody);
+    downloadTextFile(filename, markdown);
+  }
+
+  function renderDashboard() {
+    return (
+      <div className="grid gap-6">
+        <Panel className="overflow-hidden p-6 md:p-8">
+          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div>
+              <div className="inline-flex items-center gap-3 rounded-full border border-amber-200/15 bg-amber-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-amber-100/70">
+                <Sparkles className="h-4 w-4" />
+                Campana activa
               </div>
-              <div className="mt-3 text-xs leading-relaxed text-stone-500">{campaign.focus}</div>
-            </button>
-          ))}
-        </div>
-      </Panel>
+              <h1 className="mt-5 font-display text-5xl leading-tight text-stone-50 md:text-6xl">
+                {selectedCampaign?.title || "Tu cronica"}
+              </h1>
+              <p className="mt-4 max-w-3xl text-base leading-relaxed text-stone-300">
+                {selectedCampaign?.summary || "Todavia no cargaste un resumen para esta campana."}
+              </p>
 
-      <Panel className="p-4">
-        <div className="mb-3 px-2 text-xs uppercase tracking-[0.3em] text-stone-500">Secciones</div>
-        <div className="space-y-1">
-          {navItemsWithIcons.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => {
-                setActiveTab(id);
-                setMobileOpen(false);
-              }}
-              className={`flex w-full items-center gap-3 rounded-[20px] px-3 py-3 text-sm transition ${
-                activeTab === id
-                  ? "bg-amber-300/10 text-amber-100"
-                  : "text-stone-300 hover:bg-white/[0.04] hover:text-stone-100"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </button>
-          ))}
-        </div>
-      </Panel>
+              <div className="mt-6 flex flex-wrap gap-2">
+                <BadgePill>{getCampaignStatusLabel(selectedCampaign?.status)}</BadgePill>
+                {selectedCampaign?.setting ? <BadgePill tone="subtle">{selectedCampaign.setting}</BadgePill> : null}
+                {selectedCampaign?.last_session_label ? (
+                  <BadgePill tone="subtle">{selectedCampaign.last_session_label}</BadgePill>
+                ) : null}
+              </div>
 
-      <Panel className="p-4">
-        <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">Estado actual</div>
-        <div className="mt-3 space-y-3 text-sm text-stone-300">
-          <div className="rounded-2xl border border-amber-200/10 bg-white/[0.03] p-3">
-            Responsive en escritorio y celular.
-          </div>
-          <div className="rounded-2xl border border-amber-200/10 bg-white/[0.03] p-3">
-            Diario, dossier exportable y SRD conectado.
-          </div>
-          <div className="rounded-2xl border border-amber-200/10 bg-white/[0.03] p-3">
-            Próximo paso: auth real + base sincronizada.
-          </div>
-        </div>
-      </Panel>
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.45)] p-5">
+                  <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Foco actual</div>
+                  <p className="mt-3 text-sm leading-relaxed text-stone-300">
+                    {selectedCampaign?.focus || "Aun no hay foco definido."}
+                  </p>
+                </div>
+                <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.45)] p-5">
+                  <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Proximo movimiento</div>
+                  <p className="mt-3 text-sm leading-relaxed text-stone-300">
+                    {selectedCampaign?.next_move || "Aun no hay siguiente paso."}
+                  </p>
+                </div>
+              </div>
+            </div>
 
-      <ButtonPill className="w-full" onClick={() => setSession(null)}>
-        <span className="inline-flex items-center gap-2">
-          <LogOut className="h-4 w-4" />
-          Cerrar sesión
-        </span>
-      </ButtonPill>
-    </div>
-  );
+            <div className="grid gap-4 sm:grid-cols-2">
+              <MetricCard
+                value={collections.characters.length}
+                label="Personajes"
+                hint="NPCs, aliados, villanos o PJs con su propia ficha editable."
+              />
+              <MetricCard
+                value={collections.quests.length}
+                label="Misiones"
+                hint="Objetivos vivos que podes ordenar segun prioridad."
+              />
+              <MetricCard
+                value={collections.locations.length}
+                label="Locaciones"
+                hint="Lugares rapidos de ubicar antes de narrar."
+              />
+              <MetricCard
+                value={collections.savedCreatures.length}
+                label="Criaturas guardadas"
+                hint="Mascotas y formas listas para consultar sin salir de la pagina."
+              />
+            </div>
+          </div>
+        </Panel>
+
+        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+          <Panel className="p-6">
+            <SectionTitle
+              icon={BookOpen}
+              eyebrow="Bitacora"
+              title="Notas normales, pero utiles"
+              subtitle="Escribi recap, escenas, rumores y nombres. La app intenta sugerir entidades estructuradas a partir de ese texto."
+            />
+
+            <div className="mt-6 rounded-[26px] border border-amber-200/10 bg-[rgba(10,7,5,0.52)] p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-stone-300">Bitacora principal de la campana</div>
+                <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">{saveMessage}</div>
+              </div>
+              <textarea
+                value={journalBody}
+                onChange={(event) => {
+                  setJournalBody(event.target.value);
+                  setNoteDirty(true);
+                }}
+                rows={14}
+                className="min-h-[280px] w-full resize-y rounded-[24px] border border-amber-200/10 bg-[rgba(16,11,9,0.82)] px-4 py-4 text-sm leading-7 text-stone-100 outline-none placeholder:text-stone-500"
+                placeholder="Escribi aca la sesion, sospechas, nombres propios, objetos raros o locaciones. Las sugerencias aparecen a la derecha."
+              />
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <ButtonPill onClick={() => setBookOpen(true)}>Abrir vista libro</ButtonPill>
+              <ButtonPill onClick={handleExportDossier}>Exportar dossier</ButtonPill>
+            </div>
+          </Panel>
+
+          <Panel className="p-6">
+            <SectionTitle
+              icon={Compass}
+              eyebrow="Lectura inteligente"
+              title="Sugerencias desde la bitacora"
+              subtitle="No reemplaza tu criterio de mesa, pero ayuda a capturar personajes, misiones, pistas y objetos sin recargar datos dos veces."
+            />
+
+            <div className="mt-6 space-y-3">
+              {suggestionItems.length ? (
+                suggestionItems.map((suggestion) => (
+                  <div
+                    key={suggestion.id}
+                    className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap gap-2">
+                          <BadgePill>{getSuggestionKindLabel(suggestion.kind)}</BadgePill>
+                        </div>
+                        <h3 className="mt-3 text-lg font-semibold text-stone-100">{suggestion.title}</h3>
+                      </div>
+                      <ButtonPill
+                        onClick={() => handleApplySuggestion(suggestion)}
+                        disabled={busySuggestionId === suggestion.id}
+                      >
+                        {busySuggestionId === suggestion.id
+                          ? "Guardando..."
+                          : getSuggestionCreateLabel(suggestion.kind)}
+                      </ButtonPill>
+                    </div>
+                    <p className="mt-3 text-sm leading-relaxed text-stone-400">{suggestion.sourceLine}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm leading-relaxed text-stone-400">
+                  Cuando la bitacora tenga nombres, rumores, objetivos, objetos o lugares claros, van a aparecer sugerencias aca.
+                </div>
+              )}
+            </div>
+          </Panel>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCreatureWorkspace() {
+    return (
+      <div className="grid gap-6">
+        <Panel className="p-6">
+          <SectionTitle
+            icon={PawPrint}
+            eyebrow="Mascotas y transformaciones"
+            title="Biblioteca viva de criaturas"
+            subtitle="Guarda formas de druida, mascotas o aliados y abri la ficha completa dentro de la misma pagina."
+          />
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+            <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.5)] p-4">
+              <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Reglas rapidas</div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
+                    Nivel druida
+                  </span>
+                  <input
+                    type="number"
+                    min="2"
+                    max="20"
+                    value={druidLevel}
+                    onChange={(event) => setDruidLevel(Math.max(2, toNumber(event.target.value, 2)))}
+                    className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
+                    Circulo
+                  </span>
+                  <select
+                    value={isMoonDruid ? "moon" : "standard"}
+                    onChange={(event) => setIsMoonDruid(event.target.value === "moon")}
+                    className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+                  >
+                    <option value="moon">Circulo de la Luna</option>
+                    <option value="standard">Druida comun</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-4 rounded-[22px] border border-amber-200/10 bg-[rgba(16,11,9,0.82)] p-4 text-sm text-stone-300">
+                <div className="flex flex-wrap gap-2">
+                  <BadgePill>CR maximo {formatChallengeRating(wildshapeMaxChallenge)}</BadgePill>
+                  <BadgePill tone="subtle">{isMoonDruid ? "Luna" : "Forma base"}</BadgePill>
+                </div>
+                <p className="mt-3 leading-relaxed text-stone-400">
+                  La lista filtra por CR para acercarte rapido a opciones viables. Al abrir la ficha ves CA, PG, ataques, rasgos y acciones sin salir del journal.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.5)] p-4">
+                <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Formas guardadas</div>
+                <div className="mt-3 font-display text-4xl text-amber-100">{savedWildshapes.length}</div>
+                <p className="mt-2 text-sm text-stone-400">
+                  Transformaciones listas para abrir al instante durante la partida.
+                </p>
+              </div>
+
+              <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.5)] p-4">
+                <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Mascotas guardadas</div>
+                <div className="mt-3 font-display text-4xl text-amber-100">{savedCompanions.length}</div>
+                <p className="mt-2 text-sm text-stone-400">
+                  Animales, aliados o companias recurrentes con acceso rapido a la ficha.
+                </p>
+              </div>
+            </div>
+          </div>
+        </Panel>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Panel className="p-6">
+            <SectionTitle
+              icon={Shield}
+              eyebrow="Wildshape"
+              title="Formas sugeridas"
+              subtitle="Buscalas por nombre o usa la lista destacada para tener alternativas ya preparadas."
+            />
+
+            <div className="mt-6">
+              <input
+                value={wildshapeSearch}
+                onChange={(event) => setWildshapeSearch(event.target.value)}
+                placeholder="Buscar bestia por nombre..."
+                className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
+              />
+            </div>
+
+            {wildshapeState.error ? (
+              <div className="mt-4 rounded-[22px] border border-rose-300/20 bg-rose-500/10 p-4 text-sm text-rose-100">
+                {wildshapeState.error}
+              </div>
+            ) : null}
+
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              {wildshapeState.loading ? (
+                <div className="col-span-full rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
+                  Cargando formas compatibles...
+                </div>
+              ) : (
+                wildshapeState.items.map((creature) => (
+                  <CreatureCard
+                    key={`wildshape-${creature.index}`}
+                    creature={creature}
+                    actionLabel="Guardar forma"
+                    onSave={(item) => handleSaveCreature(item, "wildshape")}
+                    onOpenDetail={openCreatureDetail}
+                  />
+                ))
+              )}
+            </div>
+          </Panel>
+
+          <Panel className="p-6">
+            <SectionTitle
+              icon={PawPrint}
+              eyebrow="Compania"
+              title="Mascotas y aliados"
+              subtitle="Una seccion separada para criaturas companeras, invocadas o adoptadas."
+            />
+
+            <div className="mt-6">
+              <input
+                value={companionSearch}
+                onChange={(event) => setCompanionSearch(event.target.value)}
+                placeholder="Buscar criatura por nombre..."
+                className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
+              />
+            </div>
+
+            {companionState.error ? (
+              <div className="mt-4 rounded-[22px] border border-rose-300/20 bg-rose-500/10 p-4 text-sm text-rose-100">
+                {companionState.error}
+              </div>
+            ) : null}
+
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              {companionState.loading ? (
+                <div className="col-span-full rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
+                  Cargando criaturas recomendadas...
+                </div>
+              ) : (
+                companionState.items.map((creature) => (
+                  <CreatureCard
+                    key={`companion-${creature.index}`}
+                    creature={creature}
+                    actionLabel="Guardar mascota"
+                    onSave={(item) => handleSaveCreature(item, "companion")}
+                    onOpenDetail={openCreatureDetail}
+                  />
+                ))
+              )}
+            </div>
+          </Panel>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Panel className="p-6">
+            <SectionTitle
+              icon={Shield}
+              eyebrow="Preparadas"
+              title="Tus formas guardadas"
+              subtitle="Abri la ficha completa o limpia la lista segun la necesidad del personaje."
+            />
+
+            <div className="mt-6 space-y-4">
+              {savedWildshapes.length ? (
+                savedWildshapes.map((creature) => (
+                  <SavedCreatureCard
+                    key={`saved-form-${creature.index}`}
+                    creature={creature}
+                    label="Forma"
+                    onRemove={(index) => handleRemoveSavedCreature("wildshape", index)}
+                    onOpenDetail={openCreatureDetail}
+                  />
+                ))
+              ) : (
+                <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
+                  Todavia no guardaste formas. Usa la biblioteca de arriba para prepararlas.
+                </div>
+              )}
+            </div>
+          </Panel>
+
+          <Panel className="p-6">
+            <SectionTitle
+              icon={PawPrint}
+              eyebrow="Acompanamiento"
+              title="Tus mascotas guardadas"
+              subtitle="Pensado para companeros animales, criaturas adoptadas o apoyos frecuentes."
+            />
+
+            <div className="mt-6 space-y-4">
+              {savedCompanions.length ? (
+                savedCompanions.map((creature) => (
+                  <SavedCreatureCard
+                    key={`saved-companion-${creature.index}`}
+                    creature={creature}
+                    label="Mascota"
+                    onRemove={(index) => handleRemoveSavedCreature("companion", index)}
+                    onOpenDetail={openCreatureDetail}
+                  />
+                ))
+              ) : (
+                <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
+                  Todavia no guardaste mascotas o criaturas companeras.
+                </div>
+              )}
+            </div>
+          </Panel>
+        </div>
+      </div>
+    );
+  }
+
+  function renderActiveSection() {
+    if (activeTab === "dashboard") {
+      return renderDashboard();
+    }
+
+    if (activeTab === "creatures") {
+      return renderCreatureWorkspace();
+    }
+
+    const config = sectionConfigs[activeTab];
+    if (!config) return null;
+
+    return (
+      <EditableSection
+        title={config.title}
+        subtitle={config.subtitle}
+        eyebrow={config.eyebrow}
+        icon={config.icon}
+        items={collections[activeTab] || []}
+        fields={config.fields}
+        loading={appLoading && !collections[activeTab]?.length}
+        emptyText={config.emptyText}
+        onCreate={(draft) => handleCreateItem(activeTab, draft)}
+        onUpdate={(itemId, draft) => handleUpdateItem(activeTab, itemId, draft)}
+        onDelete={(itemId) => handleDeleteItem(activeTab, itemId)}
+        onMove={(itemId, direction) => handleMoveItem(activeTab, itemId, direction)}
+        renderDisplay={config.renderDisplay}
+      />
+    );
+  }
 
   if (!session) {
     return (
       <LoginScreen
-        authMode={AUTH_MODE}
-        onLogin={handleLogin}
-        onDemoLogin={(provider, name) =>
-          setSession({
-            email: "mesa-demo@campaign.quest",
-            name,
-            provider,
-            mode: AUTH_MODE,
-            createdAt: new Date().toISOString(),
-          })
-        }
+        authMode="Supabase email/password"
+        loading={authLoading}
+        errorMessage={authError}
+        statusMessage={authStatus}
+        confirmationPendingEmail={confirmationPendingEmail}
+        isConfigured={isSupabaseConfigured}
+        onSignIn={handleSignIn}
+        onSignUp={handleSignUp}
+        onResendConfirmation={handleResendConfirmation}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(242,201,124,0.12),transparent_24%),linear-gradient(180deg,#130e0b_0%,#080604_100%)] text-stone-100">
-      {mobileOpen ? (
-        <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
-          onClick={() => setMobileOpen(false)}
-        >
-          <div
-            className="h-full w-[88vw] max-w-sm overflow-y-auto p-4"
-            onClick={(event) => event.stopPropagation()}
-          >
-            {sidebar}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-6">
-        <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="hidden lg:block">{sidebar}</aside>
-
-          <main className="space-y-5">
-            <header className="rounded-[32px] border border-amber-200/10 bg-[rgba(18,13,10,0.82)] p-5 shadow-[0_18px_70px_rgba(0,0,0,0.25)] md:p-6">
-              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 lg:hidden">
-                    <button
-                      type="button"
-                      onClick={() => setMobileOpen(true)}
-                      className="rounded-2xl border border-amber-200/15 bg-white/[0.03] p-3 text-stone-100"
-                    >
-                      <Menu className="h-5 w-5" />
-                    </button>
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">
-                        Campaña activa
-                      </div>
-                      <div className="font-display text-2xl text-stone-100">
-                        {selectedCampaign.name}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="hidden lg:block">
-                    <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">
-                      Campaña activa
-                    </div>
-                    <h1 className="mt-3 font-display text-5xl text-stone-100">
-                      {selectedCampaign.name}
-                    </h1>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <BadgePill tone={selectedCampaign.status === "Activa" ? "success" : "subtle"}>
-                      {selectedCampaign.status}
-                    </BadgePill>
-                    <BadgePill tone="subtle">{selectedCampaign.setting}</BadgePill>
-                    <BadgePill tone="subtle">SRD 2014 conectado</BadgePill>
-                    <BadgePill tone="subtle">Responsive</BadgePill>
-                  </div>
-
-                  <p className="max-w-3xl text-sm leading-relaxed text-stone-300 md:text-base">
-                    {selectedCampaign.summary}
-                  </p>
-
-                  <div className="flex flex-wrap items-center gap-4 text-xs text-stone-400 md:text-sm">
-                    <span className="inline-flex items-center gap-2">
-                      <Compass className="h-4 w-4" />
-                      {selectedCampaign.lastSession}
-                    </span>
-                    <span className="inline-flex items-center gap-2">
-                      <Cloud className="h-4 w-4" />
-                      Guardado local listo para migrar a nube
-                    </span>
-                    <span className="inline-flex items-center gap-2">
-                      <Users className="h-4 w-4" />
-                      Acceso actual: {session.name}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ButtonPill primary onClick={() => setBookOpen(true)}>
-                    Abrir bitácora
-                  </ButtonPill>
-                  <ButtonPill onClick={handleExportDossier}>Exportar dossier</ButtonPill>
-                  <div className="rounded-[24px] border border-amber-200/10 bg-white/[0.03] p-4 sm:col-span-2">
-                    <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">
-                      Estado de mesa
-                    </div>
-                    <div className="mt-2 font-medium text-stone-100">{systemMessage}</div>
-                    <div className="mt-2 text-sm text-stone-400">{selectedCampaign.nextMove}</div>
-                  </div>
-                </div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(241,191,105,0.14),transparent_22%),linear-gradient(180deg,#120d0a_0%,#060403_100%)] text-stone-100">
+      <div className="mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-6">
+        <Panel className="p-4 md:p-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">DyD journal</div>
+              <div className="mt-2 font-display text-3xl text-stone-50">
+                {selectedCampaign?.title || "Cargando campana..."}
               </div>
-            </header>
-
-            <div className="hide-scrollbar -mx-4 overflow-x-auto px-4 lg:hidden">
-              <div className="flex gap-2 pb-1">
-                {navItemsWithIcons.map(({ id, label, icon: Icon }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setActiveTab(id)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm whitespace-nowrap ${
-                      activeTab === id
-                        ? "border-amber-200/20 bg-amber-300/10 text-amber-100"
-                        : "border-white/8 bg-white/[0.03] text-stone-300"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <p className="mt-2 max-w-2xl text-sm text-stone-400">
+                Diario de mesa responsive con auth real, secciones editables y acceso rapido a criaturas.
+              </p>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[1fr_auto]">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Buscar personajes, misiones, sesiones, locaciones, objetos o notas..."
-                  className="h-14 w-full rounded-[26px] border border-amber-200/10 bg-[rgba(16,11,9,0.78)] pl-12 pr-4 text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-200/25"
-                />
-              </div>
+            <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center md:justify-end">
+              <label className="min-w-[220px]">
+                <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
+                  Campana
+                </span>
+                <select
+                  value={selectedCampaignId}
+                  onChange={(event) => setSelectedCampaignId(event.target.value)}
+                  className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+                >
+                  {campaigns.map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-              <div className="flex flex-wrap gap-2">
-                <ButtonPill onClick={() => setActiveTab("creatures")}>Ir a mascotas</ButtonPill>
-                <ButtonPill onClick={() => setActiveTab("sessions")}>Ver sesiones</ButtonPill>
-              </div>
-            </div>
-
-            <SearchGroupPanel groups={globalSearchGroups} query={search} />
-
-            {activeTab === "dashboard" ? (
-              <div className="space-y-5">
-                <Panel className={`overflow-hidden bg-gradient-to-br ${selectedCampaign.accent} p-[1px]`}>
-                  <div className="rounded-[27px] bg-[rgba(16,11,9,0.94)] p-6">
-                    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-                      <div>
-                        <SectionTitle
-                          icon={Castle}
-                          eyebrow="Resumen narrativo"
-                          title="Todo lo importante antes de tirar iniciativa"
-                          subtitle="Una vista pensada para retomar la campaña en menos de un minuto."
-                        />
-
-                        <div className="mt-5 grid gap-4 md:grid-cols-2">
-                          <MetricCard
-                            value={selectedCampaign.stats[0].value}
-                            label={selectedCampaign.stats[0].label}
-                            hint="La mesa ya sabe qué frente está más vivo."
-                          />
-                          <MetricCard
-                            value={savedForms.length}
-                            label="Formas guardadas"
-                            hint="Tus favoritas quedan listas para combate o exploración."
-                          />
-                          <MetricCard
-                            value={savedCompanions.length}
-                            label="Mascotas guardadas"
-                            hint="Ideal para monturas, aliados o bichitos adoptados."
-                          />
-                          <MetricCard
-                            value={currentNotes.trim() ? currentNotes.trim().split(/\n+/).length : 0}
-                            label="Entradas de diario"
-                            hint="Se guardan automáticamente en este dispositivo."
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-4">
-                        <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(8,6,4,0.35)] p-5">
-                          <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">
-                            Foco actual
-                          </div>
-                          <div className="mt-3 font-medium text-stone-100">
-                            {selectedCampaign.focus}
-                          </div>
-                          <p className="mt-3 text-sm leading-relaxed text-stone-400">
-                            Próximo movimiento sugerido: {selectedCampaign.nextMove}
-                          </p>
-                        </div>
-
-                        <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(8,6,4,0.35)] p-5">
-                          <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">
-                            Preparación de mesa
-                          </div>
-                          <div className="mt-4 space-y-3 text-sm text-stone-300">
-                            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
-                              Diario con autoguardado local y apertura tipo libro.
-                            </div>
-                            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
-                              Compendio SRD para guardar mascotas o formas útiles.
-                            </div>
-                            <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">
-                              Dossier exportable para compartir el estado de campaña.
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </Panel>
-
-                <div className="grid gap-5 xl:grid-cols-3">
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={Users}
-                      eyebrow="Elenco"
-                      title="Personajes destacados"
-                      subtitle="Quienes más pesan en la sesión de hoy."
-                    />
-                    <div className="mt-5 space-y-3">
-                      {characters.slice(0, 3).map((item) => (
-                        <div
-                          key={item.name}
-                          className="rounded-[24px] border border-amber-200/10 bg-[rgba(14,10,8,0.76)] p-4"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="font-medium text-stone-100">{item.name}</div>
-                            <BadgePill tone="subtle">{item.tag}</BadgePill>
-                          </div>
-                          <div className="mt-1 text-xs uppercase tracking-[0.26em] text-amber-100/45">
-                            {item.role}
-                          </div>
-                          <p className="mt-3 text-sm text-stone-400">{item.note}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </Panel>
-
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={Swords}
-                      eyebrow="Fricción"
-                      title="Misiones en juego"
-                      subtitle="Lo que empuja la próxima escena."
-                    />
-                    <div className="mt-5 space-y-3">
-                      {quests.map((item) => (
-                        <div
-                          key={item.title}
-                          className="rounded-[24px] border border-amber-200/10 bg-[rgba(14,10,8,0.76)] p-4"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="font-medium text-stone-100">{item.title}</div>
-                            <BadgePill>{item.status}</BadgePill>
-                          </div>
-                          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </Panel>
-
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={BookOpen}
-                      eyebrow="Recap"
-                      title="Últimas notas del diario"
-                      subtitle="Ideal para volver a la ficción sin releer todo."
-                    />
-                    <div className="mt-5 space-y-3">
-                      {notesPreview.map((line, index) => (
-                        <div
-                          key={`${line}-${index}`}
-                          className="rounded-[24px] border border-amber-200/10 bg-[rgba(14,10,8,0.76)] p-4 text-sm leading-relaxed text-stone-300"
-                        >
-                          {line}
-                        </div>
-                      ))}
-                      <ButtonPill className="w-full" onClick={() => setBookOpen(true)}>
-                        Seguir escribiendo
-                      </ButtonPill>
-                    </div>
-                  </Panel>
-                </div>
-
-                <div className="grid gap-5 xl:grid-cols-2">
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={MapPinned}
-                      eyebrow="Mapa vivo"
-                      title="Locaciones clave"
-                      subtitle="Puntos que la mesa necesita ubicar rápido."
-                    />
-                    <div className="mt-5 grid gap-4 md:grid-cols-2">
-                      {locations.map((item) => (
-                        <InfoCard
-                          key={item.title}
-                          title={item.title}
-                          badge={item.type}
-                          description={item.detail}
-                        />
-                      ))}
-                    </div>
-                  </Panel>
-
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={PawPrint}
-                      eyebrow="Biblioteca rápida"
-                      title="Mascotas y formas guardadas"
-                      subtitle="Tus fichas favoritas quedan listas para abrir en un clic."
-                    />
-                    <div className="mt-5 grid gap-4 md:grid-cols-2">
-                      {savedForms.slice(0, 2).map((creature) => (
-                        <SavedCreatureCard
-                          key={`saved-form-${creature.index}`}
-                          creature={creature}
-                          label="Forma"
-                          onRemove={(index) =>
-                            setSavedForms((previous) =>
-                              previous.filter((item) => item.index !== index),
-                            )
-                          }
-                        />
-                      ))}
-
-                      {savedCompanions.slice(0, 2).map((creature) => (
-                        <SavedCreatureCard
-                          key={`saved-companion-${creature.index}`}
-                          creature={creature}
-                          label="Mascota"
-                          onRemove={(index) =>
-                            setSavedCompanions((previous) =>
-                              previous.filter((item) => item.index !== index),
-                            )
-                          }
-                        />
-                      ))}
-
-                      {!savedForms.length && !savedCompanions.length ? (
-                        <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-5 text-sm text-stone-400 md:col-span-2">
-                          Todavía no guardaste criaturas. Desde la sección de mascotas podés traer
-                          bestias del SRD y dejar a mano las más útiles.
-                        </div>
-                      ) : null}
-                    </div>
-                  </Panel>
-                </div>
-              </div>
-            ) : null}
-            {activeTab !== "dashboard" && activeTab !== "creatures" ? (
-              <CollectionSection sectionKey={activeTab} items={filteredSections[activeTab]} />
-            ) : null}
-            {activeTab === "creatures" ? (
-              <div className="space-y-5">
-                <Panel className="p-6">
-                  <SectionTitle
-                    icon={PawPrint}
-                    eyebrow="SRD abierto"
-                    title="Mascotas y transformaciones"
-                    subtitle="El bestiario dejó de ser un bloque suelto: ahora separa formas del druida y criaturas que querés archivar como compañeras."
+              <label className="min-w-[260px]">
+                <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
+                  Busqueda global
+                </span>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Buscar nombres, pistas, objetos..."
+                    className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] pl-10 pr-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
                   />
-
-                  <div className="mt-6 grid gap-4 lg:grid-cols-4">
-                    <MetricCard
-                      value={druidLevel}
-                      label="Nivel de druida"
-                      hint="Se usa para calcular el CR máximo de forma salvaje."
-                    />
-                    <MetricCard
-                      value={formatChallengeRating(maxWildShapeCR)}
-                      label="CR máximo"
-                      hint="Calculado para la referencia SRD 2014 que usa esta integración."
-                    />
-                    <MetricCard
-                      value={savedForms.length}
-                      label="Formas listas"
-                      hint="Tus fichas guardadas para exploración, combate o scouting."
-                    />
-                    <MetricCard
-                      value={savedCompanions.length}
-                      label="Mascotas listas"
-                      hint="Monturas, aliados o criaturas adoptadas con ficha al alcance."
-                    />
-                  </div>
-
-                  <div className="mt-6 grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-                    <div className="rounded-[26px] border border-amber-200/10 bg-[rgba(12,8,6,0.55)] p-5">
-                      <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">
-                        Configuración druida
-                      </div>
-                      <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        <label className="block">
-                          <span className="mb-2 block text-sm font-medium text-stone-200">
-                            Nivel actual
-                          </span>
-                          <input
-                            type="number"
-                            min="2"
-                            max="20"
-                            value={druidLevel}
-                            onChange={(event) =>
-                              setDruidLevel(
-                                Math.max(2, Math.min(20, Number(event.target.value) || 2)),
-                              )
-                            }
-                            className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-lg font-semibold text-amber-100 outline-none"
-                          />
-                        </label>
-
-                        <div>
-                          <span className="mb-2 block text-sm font-medium text-stone-200">
-                            Círculo
-                          </span>
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setIsMoonDruid(false)}
-                              className={`rounded-full border px-4 py-2 text-sm ${
-                                !isMoonDruid
-                                  ? "border-amber-200/20 bg-amber-300/10 text-amber-100"
-                                  : "border-white/10 bg-white/[0.03] text-stone-300"
-                              }`}
-                            >
-                              Druida base
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setIsMoonDruid(true)}
-                              className={`rounded-full border px-4 py-2 text-sm ${
-                                isMoonDruid
-                                  ? "border-amber-200/20 bg-amber-300/10 text-amber-100"
-                                  : "border-white/10 bg-white/[0.03] text-stone-300"
-                              }`}
-                            >
-                              Círculo de la Luna
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 rounded-2xl border border-amber-200/10 bg-white/[0.03] p-4 text-sm leading-relaxed text-stone-400">
-                        Esta integración consulta la fuente abierta del SRD para evitar cargar
-                        stats a mano y mantener una base consistente en el journal.
-                      </div>
-                    </div>
-
-                    <div className="rounded-[26px] border border-amber-200/10 bg-[rgba(12,8,6,0.55)] p-5">
-                      <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">
-                        Qué resuelve
-                      </div>
-                      <div className="mt-4 grid gap-3 md:grid-cols-3">
-                        <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-stone-300">
-                          Separa claramente formas del druida de mascotas o aliados.
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-stone-300">
-                          Guarda tus criaturas favoritas para no buscarlas cada sesión.
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 text-sm text-stone-300">
-                          Trae datos reales del SRD con links directos a la ficha fuente.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </Panel>
-
-                <div className="grid gap-5 xl:grid-cols-2">
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={Compass}
-                      eyebrow="Forma salvaje"
-                      title="Transformaciones SRD"
-                      subtitle="Buscá bestias útiles para tu druida y dejalas listas con sus stats reales."
-                    />
-
-                    <div className="mt-5 flex flex-col gap-3 md:flex-row">
-                      <div className="relative flex-1">
-                        <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
-                        <input
-                          value={wildshapeSearch}
-                          onChange={(event) => setWildshapeSearch(event.target.value)}
-                          placeholder="Buscar bestias por nombre..."
-                          className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] pl-12 pr-4 text-stone-100 outline-none placeholder:text-stone-500"
-                        />
-                      </div>
-                      <BadgePill className="self-start md:self-center">
-                        CR máximo {formatChallengeRating(maxWildShapeCR)}
-                      </BadgePill>
-                    </div>
-
-                    {savedForms.length ? (
-                      <div className="mt-5 grid gap-4">
-                        {savedForms.map((creature) => (
-                          <SavedCreatureCard
-                            key={`form-${creature.index}`}
-                            creature={creature}
-                            label="Forma guardada"
-                            onRemove={(index) =>
-                              setSavedForms((previous) =>
-                                previous.filter((item) => item.index !== index),
-                              )
-                            }
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <div className="mt-5">
-                      {wildshapeState.loading ? (
-                        <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-5 text-sm text-stone-400">
-                          Consultando criaturas SRD para las formas disponibles...
-                        </div>
-                      ) : null}
-
-                      {wildshapeState.error ? (
-                        <div className="rounded-[24px] border border-rose-300/20 bg-rose-500/10 p-5 text-sm text-rose-100">
-                          {wildshapeState.error}
-                        </div>
-                      ) : null}
-
-                      {!wildshapeState.loading && !wildshapeState.error ? (
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {wildshapeState.items.length ? (
-                            wildshapeState.items.map((creature) => (
-                              <CreatureCard
-                                key={`wildshape-${creature.index}`}
-                                creature={creature}
-                                actionLabel="Guardar forma"
-                                onSave={(creatureToSave) => {
-                                  setSavedForms((previous) =>
-                                    upsertCreatureEntry(previous, creatureToSave),
-                                  );
-                                  setSystemMessage(
-                                    `${creatureToSave.name} quedó guardada como forma.`,
-                                  );
-                                }}
-                              />
-                            ))
-                          ) : (
-                            <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-5 text-sm text-stone-400 md:col-span-2">
-                              No encontré bestias compatibles con ese nombre y ese CR.
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  </Panel>
-
-                  <Panel className="p-6">
-                    <SectionTitle
-                      icon={PawPrint}
-                      eyebrow="Compañeros"
-                      title="Mascotas y criaturas aliadas"
-                      subtitle="Para druidas, monturas, bichitos adoptados o cualquier criatura que quieras tener a mano."
-                    />
-
-                    <div className="mt-5 relative">
-                      <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
-                      <input
-                        value={companionSearch}
-                        onChange={(event) => setCompanionSearch(event.target.value)}
-                        placeholder="Buscar criatura por nombre..."
-                        className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] pl-12 pr-4 text-stone-100 outline-none placeholder:text-stone-500"
-                      />
-                    </div>
-
-                    {savedCompanions.length ? (
-                      <div className="mt-5 grid gap-4">
-                        {savedCompanions.map((creature) => (
-                          <SavedCreatureCard
-                            key={`companion-${creature.index}`}
-                            creature={creature}
-                            label="Mascota guardada"
-                            onRemove={(index) =>
-                              setSavedCompanions((previous) =>
-                                previous.filter((item) => item.index !== index),
-                              )
-                            }
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <div className="mt-5">
-                      {companionState.loading ? (
-                        <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-5 text-sm text-stone-400">
-                          Buscando criaturas del SRD para tu biblioteca de mascotas...
-                        </div>
-                      ) : null}
-
-                      {companionState.error ? (
-                        <div className="rounded-[24px] border border-rose-300/20 bg-rose-500/10 p-5 text-sm text-rose-100">
-                          {companionState.error}
-                        </div>
-                      ) : null}
-
-                      {!companionState.loading && !companionState.error ? (
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {companionState.items.length ? (
-                            companionState.items.map((creature) => (
-                              <CreatureCard
-                                key={`companion-card-${creature.index}`}
-                                creature={creature}
-                                actionLabel="Guardar criatura"
-                                onSave={(creatureToSave) => {
-                                  setSavedCompanions((previous) =>
-                                    upsertCreatureEntry(previous, creatureToSave),
-                                  );
-                                  setSystemMessage(
-                                    `${creatureToSave.name} quedó guardada como mascota o aliado.`,
-                                  );
-                                }}
-                              />
-                            ))
-                          ) : (
-                            <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-5 text-sm text-stone-400 md:col-span-2">
-                              No encontré criaturas que coincidan con esa búsqueda.
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  </Panel>
                 </div>
+              </label>
+
+              <div className="flex gap-2 self-end md:self-auto">
+                <ButtonPill onClick={handleExportDossier}>Exportar</ButtonPill>
+                <ButtonPill onClick={() => setBookOpen(true)}>Bitacora</ButtonPill>
+                <ButtonPill onClick={handleSignOut}>
+                  <span className="inline-flex items-center gap-2">
+                    <LogOut className="h-4 w-4" />
+                    Salir
+                  </span>
+                </ButtonPill>
               </div>
-            ) : null}
-          </main>
+            </div>
+          </div>
+
+          <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const active = item.id === activeTab;
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveTab(item.id)}
+                  className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-sm transition ${
+                    active
+                      ? "border-amber-200/20 bg-amber-300/10 text-amber-100"
+                      : "border-white/10 bg-white/[0.03] text-stone-300 hover:text-stone-100"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </Panel>
+
+        {appError ? (
+          <div className="mt-6 rounded-[24px] border border-rose-300/20 bg-rose-500/10 px-5 py-4 text-sm text-rose-100">
+            {appError}
+          </div>
+        ) : null}
+
+        {busySectionKey ? (
+          <div className="mt-4 rounded-[24px] border border-amber-200/10 bg-amber-300/10 px-5 py-4 text-sm text-amber-100">
+            Guardando cambios en {sectionConfigs[busySectionKey]?.title?.toLowerCase() || "la seccion"}...
+          </div>
+        ) : null}
+
+        <div className="mt-6">
+          <SearchGroupPanel groups={searchGroups} query={deferredSearch} />
         </div>
+
+        <div className="mt-6">{renderActiveSection()}</div>
       </div>
 
       <BookOverlay
         open={bookOpen}
         onClose={() => setBookOpen(false)}
-        campaignName={selectedCampaign.name}
-        noteValue={currentNotes}
+        campaignName={selectedCampaign?.title || "Bitacora"}
+        noteValue={journalBody}
         onNoteChange={(value) => {
-          setSaveMessage("Guardando...");
-          setNotesByCampaign((previous) => ({ ...previous, [selectedCampaign.id]: value }));
+          setJournalBody(value);
+          setNoteDirty(true);
         }}
         saveMessage={saveMessage}
-        placeholderLines={journalPlaceholders[selectedCampaign.id] || []}
+        placeholderLines={[
+          "Usa esta doble pagina para repasar, escribir y ordenar ideas antes de la sesion.",
+          "Los nombres, pistas y objetos que se repiten pueden transformarse en apartados propios.",
+          "Si estas en plena partida, la biblioteca de criaturas queda lista para abrir fichas al instante.",
+        ]}
+      />
+
+      <CreatureDetailModal
+        creature={creatureDetailState.creature}
+        loading={creatureDetailState.loading}
+        error={creatureDetailState.error}
+        onClose={() =>
+          setCreatureDetailState({
+            creature: null,
+            loading: false,
+            error: "",
+          })
+        }
       />
     </div>
   );

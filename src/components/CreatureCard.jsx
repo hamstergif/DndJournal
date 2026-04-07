@@ -1,9 +1,9 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { PawPrint, X } from "lucide-react";
+import { Eye, PawPrint, X } from "lucide-react";
 import { BadgePill, ButtonPill } from "./ui";
 
-export function CreatureCard({ creature, actionLabel, onSave }) {
+export function CreatureCard({ creature, actionLabel, onSave, onOpenDetail }) {
   return (
     <motion.article whileHover={{ y: -4 }} transition={{ duration: 0.18 }}>
       <div className="flex h-full flex-col overflow-hidden rounded-[26px] border border-amber-200/10 bg-[rgba(15,11,8,0.84)]">
@@ -65,14 +65,12 @@ export function CreatureCard({ creature, actionLabel, onSave }) {
 
           <div className="mt-auto flex flex-wrap gap-2 pt-5">
             <ButtonPill onClick={() => onSave(creature)}>{actionLabel}</ButtonPill>
-            <a
-              href={creature.sourceUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center rounded-2xl border border-amber-200/15 px-4 py-3 text-sm font-semibold text-stone-200 transition hover:bg-white/[0.04]"
-            >
-              Abrir ficha SRD
-            </a>
+            <ButtonPill onClick={() => onOpenDetail?.(creature.index)}>
+              <span className="inline-flex items-center gap-2">
+                <Eye className="h-4 w-4" />
+                Ver ficha
+              </span>
+            </ButtonPill>
           </div>
         </div>
       </div>
@@ -80,7 +78,7 @@ export function CreatureCard({ creature, actionLabel, onSave }) {
   );
 }
 
-export function SavedCreatureCard({ creature, label, onRemove }) {
+export function SavedCreatureCard({ creature, label, onRemove, onOpenDetail }) {
   return (
     <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(14,10,8,0.72)] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -110,14 +108,17 @@ export function SavedCreatureCard({ creature, label, onRemove }) {
         <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3">{creature.speed}</div>
       </div>
 
-      <a
-        href={creature.sourceUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-4 inline-flex items-center text-sm font-medium text-amber-100 transition hover:text-amber-50"
-      >
-        Ver fuente SRD
-      </a>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <ButtonPill onClick={() => onOpenDetail?.(creature.index)}>Abrir ficha</ButtonPill>
+        <a
+          href={creature.sourceUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center text-sm font-medium text-amber-100 transition hover:text-amber-50"
+        >
+          Ver fuente SRD
+        </a>
+      </div>
     </div>
   );
 }

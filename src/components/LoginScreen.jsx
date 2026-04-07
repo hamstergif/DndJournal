@@ -1,27 +1,52 @@
-import React, { useState } from "react";
-import { Sparkles } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { MailCheck, ShieldCheck, Sparkles } from "lucide-react";
 import { BadgePill, ButtonPill, Panel } from "./ui";
 
-export function LoginScreen({ authMode, onLogin, onDemoLogin }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+export function LoginScreen({
+  authMode,
+  loading,
+  errorMessage,
+  statusMessage,
+  confirmationPendingEmail,
+  isConfigured,
+  onSignIn,
+  onSignUp,
+  onResendConfirmation,
+}) {
+  const [mode, setMode] = useState("signin");
+  const [formState, setFormState] = useState({
+    displayName: "",
+    email: "",
+    password: "",
+  });
+
+  const canSubmit = useMemo(() => {
+    if (!formState.email.trim() || formState.password.trim().length < 6) return false;
+    if (mode === "signup" && !formState.displayName.trim()) return false;
+    return true;
+  }, [formState, mode]);
+
+  const handleChange = (key, value) => {
+    setFormState((previous) => ({ ...previous, [key]: value }));
+  };
 
   const handleSubmit = (event) => {
     event.preventDefault();
+    if (!canSubmit || loading) return;
 
-    if (!email.trim()) {
-      setError("Necesito un correo para abrir la bitácora.");
+    if (mode === "signup") {
+      onSignUp({
+        displayName: formState.displayName.trim(),
+        email: formState.email.trim(),
+        password: formState.password.trim(),
+      });
       return;
     }
 
-    if (password.trim().length < 6) {
-      setError("Usá una clave de al menos 6 caracteres para esta alpha.");
-      return;
-    }
-
-    setError("");
-    onLogin({ email: email.trim(), password: password.trim() });
+    onSignIn({
+      email: formState.email.trim(),
+      password: formState.password.trim(),
+    });
   };
 
   return (
@@ -41,100 +66,39 @@ export function LoginScreen({ authMode, onLogin, onDemoLogin }) {
 
           <div className="max-w-2xl">
             <h1 className="font-display text-5xl leading-tight text-stone-50 md:text-6xl">
-              Un journal de DyD que se sienta como tu mesa.
+              Un journal de DyD para jugar, anotar y ordenar tu mesa.
             </h1>
             <p className="mt-5 max-w-xl text-lg leading-relaxed text-stone-300">
-              Diario, personajes, locaciones, mascotas y transformaciones en una experiencia
-              responsive para PC y celular, con estética medieval y una entrada clara para arrancar
-              rápido.
+              Ahora con acceso real por Supabase, confirmación por mail y una base lista para
+              persistir campañas, bitácora, criaturas y secciones editables.
             </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
             <Panel className="p-5">
-              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Mesa lista</div>
-              <div className="mt-3 font-display text-3xl text-amber-100">PC + móvil</div>
+              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Acceso</div>
+              <div className="mt-3 font-display text-3xl text-amber-100">Registro real</div>
               <p className="mt-2 text-sm text-stone-400">
-                Navegación pensada para escritorio, celular y sesiones rápidas.
+                Alta por mail y contraseña con confirmación antes de entrar por primera vez.
               </p>
             </Panel>
 
             <Panel className="p-5">
-              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Compendio</div>
-              <div className="mt-3 font-display text-3xl text-amber-100">SRD enlazado</div>
+              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Persistencia</div>
+              <div className="mt-3 font-display text-3xl text-amber-100">Supabase</div>
               <p className="mt-2 text-sm text-stone-400">
-                Formas y criaturas con base abierta para no inventar stats ni cargarlos a mano.
+                Las campañas y fichas pueden pasar de local a una base real y sincronizable.
               </p>
             </Panel>
 
             <Panel className="p-5">
-              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Autenticación</div>
-              <div className="mt-3 font-display text-3xl text-amber-100">Lista para crecer</div>
+              <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Mesa</div>
+              <div className="mt-3 font-display text-3xl text-amber-100">Todo junto</div>
               <p className="mt-2 text-sm text-stone-400">
-                Esta alpha guarda sesión local y deja el flujo listo para conectar auth real.
+                Personajes, misiones, locaciones, bitácora y criaturas en un mismo flujo.
               </p>
             </Panel>
           </div>
-
-          <Panel className="overflow-hidden">
-            <div className="grid gap-6 p-6 md:grid-cols-[1.1fr_0.9fr]">
-              <div>
-                <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">
-                  Lo que ya suma valor
-                </div>
-                <div className="mt-4 space-y-4">
-                  <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                    <div className="text-sm font-semibold text-stone-100">Búsqueda global</div>
-                    <div className="mt-1 text-sm text-stone-400">
-                      Encontrás personajes, objetos, sesiones y secretos sin perderte entre pestañas.
-                    </div>
-                  </div>
-
-                  <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                    <div className="text-sm font-semibold text-stone-100">Bitácora exportable</div>
-                    <div className="mt-1 text-sm text-stone-400">
-                      El dossier de campaña sale en un archivo descargable para compartir o archivar.
-                    </div>
-                  </div>
-
-                  <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                    <div className="text-sm font-semibold text-stone-100">
-                      Mascotas y transformaciones separadas
-                    </div>
-                    <div className="mt-1 text-sm text-stone-400">
-                      El druida guarda formas útiles y el resto de la party puede archivar criaturas de compañía.
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-[28px] border border-amber-200/10 bg-[linear-gradient(180deg,rgba(240,214,173,0.08),rgba(60,41,21,0.06))] p-5">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">
-                      Acceso principal
-                    </div>
-                    <div className="mt-2 font-display text-2xl text-stone-100">
-                      Entrada elegante y clara.
-                    </div>
-                  </div>
-                  <BadgePill tone="success">Alpha funcional</BadgePill>
-                </div>
-
-                <div className="space-y-3 text-sm text-stone-300">
-                  <div className="rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.35)] p-3">
-                    Vista de acceso con identidad medieval y accesos rapidos.
-                  </div>
-                  <div className="rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.35)] p-3">
-                    Formulario limpio, responsivo y listo para reemplazar el handler local por auth real.
-                  </div>
-                  <div className="rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.35)] p-3">
-                    Tonalidad medieval, serif expresiva y paneles con sensación de pergamino oscuro.
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Panel>
         </section>
 
         <section className="justify-self-stretch">
@@ -143,20 +107,53 @@ export function LoginScreen({ authMode, onLogin, onDemoLogin }) {
               <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">Acceso</div>
               <h2 className="mt-3 font-display text-4xl text-stone-100">Entrá a tu mesa</h2>
               <p className="mt-3 text-sm leading-relaxed text-stone-400">
-                Este flujo ya funciona y persiste sesión. Hoy corre en modo{" "}
-                <span className="text-amber-100">{authMode}</span>; mañana puede apuntar a
-                Supabase, Clerk o Auth0 sin rehacer la pantalla.
+                Configuración detectada: <span className="text-amber-100">{authMode}</span>
               </p>
             </div>
 
+            <div className="mb-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMode("signin")}
+                className={`rounded-full border px-4 py-2 text-sm ${
+                  mode === "signin"
+                    ? "border-amber-200/20 bg-amber-300/10 text-amber-100"
+                    : "border-white/10 bg-white/[0.03] text-stone-300"
+                }`}
+              >
+                Iniciar sesión
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("signup")}
+                className={`rounded-full border px-4 py-2 text-sm ${
+                  mode === "signup"
+                    ? "border-amber-200/20 bg-amber-300/10 text-amber-100"
+                    : "border-white/10 bg-white/[0.03] text-stone-300"
+                }`}
+              >
+                Crear cuenta
+              </button>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-4">
+              {mode === "signup" ? (
+                <label className="block">
+                  <span className="mb-2 block text-sm font-medium text-stone-200">Nombre visible</span>
+                  <input
+                    value={formState.displayName}
+                    onChange={(event) => handleChange("displayName", event.target.value)}
+                    placeholder="Aryn, Guardián del Bosque"
+                    className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-200/30"
+                  />
+                </label>
+              ) : null}
+
               <label className="block">
-                <span className="mb-2 block text-sm font-medium text-stone-200">
-                  Correo del aventurero
-                </span>
+                <span className="mb-2 block text-sm font-medium text-stone-200">Correo</span>
                 <input
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  value={formState.email}
+                  onChange={(event) => handleChange("email", event.target.value)}
                   placeholder="tu-mesa@campaign.quest"
                   className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-200/30"
                 />
@@ -166,44 +163,75 @@ export function LoginScreen({ authMode, onLogin, onDemoLogin }) {
                 <span className="mb-2 block text-sm font-medium text-stone-200">Clave</span>
                 <input
                   type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  value={formState.password}
+                  onChange={(event) => handleChange("password", event.target.value)}
                   placeholder="******"
                   className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-stone-100 outline-none placeholder:text-stone-500 focus:border-amber-200/30"
                 />
               </label>
 
-              {error ? (
+              {!isConfigured ? (
                 <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                  {error}
+                  Falta configurar `VITE_SUPABASE_URL` y `VITE_SUPABASE_PUBLISHABLE_KEY`.
                 </div>
               ) : null}
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <ButtonPill primary type="submit" className="w-full">
-                  Iniciar sesión
-                </ButtonPill>
-                <ButtonPill
-                  className="w-full"
-                  onClick={() => onDemoLogin("demo", "Mesa demo")}
-                >
-                  Entrar en modo demo
-                </ButtonPill>
-              </div>
+              {errorMessage ? (
+                <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                  {errorMessage}
+                </div>
+              ) : null}
+
+              {statusMessage ? (
+                <div className="rounded-2xl border border-emerald-300/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                  {statusMessage}
+                </div>
+              ) : null}
+
+              {confirmationPendingEmail ? (
+                <div className="rounded-2xl border border-amber-200/15 bg-amber-300/10 px-4 py-4 text-sm text-amber-50">
+                  <div className="flex items-start gap-3">
+                    <MailCheck className="mt-0.5 h-4 w-4" />
+                    <div>
+                      Revisá <span className="font-semibold">{confirmationPendingEmail}</span> para confirmar tu cuenta.
+                      Después de abrir el link vas a poder entrar normalmente.
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <ButtonPill onClick={() => onResendConfirmation(confirmationPendingEmail)}>
+                      Reenviar confirmación
+                    </ButtonPill>
+                  </div>
+                </div>
+              ) : null}
+
+              <ButtonPill primary type="submit" className="w-full" disabled={!canSubmit || loading || !isConfigured}>
+                {loading
+                  ? "Procesando..."
+                  : mode === "signup"
+                    ? "Crear cuenta y enviar mail"
+                    : "Iniciar sesión"}
+              </ButtonPill>
             </form>
 
             <div className="mt-6 grid gap-3 md:grid-cols-3">
               <div className="rounded-2xl border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Auth</div>
-                <div className="mt-2 text-sm text-stone-200">Flujo y persistencia resueltos</div>
+                <div className="mb-2 inline-flex rounded-full border border-amber-200/10 p-2 text-amber-100">
+                  <MailCheck className="h-4 w-4" />
+                </div>
+                <div className="text-sm text-stone-200">Confirmación por mail</div>
               </div>
               <div className="rounded-2xl border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Diseño</div>
-                <div className="mt-2 text-sm text-stone-200">Acceso claro con identidad medieval</div>
+                <div className="mb-2 inline-flex rounded-full border border-amber-200/10 p-2 text-amber-100">
+                  <ShieldCheck className="h-4 w-4" />
+                </div>
+                <div className="text-sm text-stone-200">Sesión persistente segura</div>
               </div>
               <div className="rounded-2xl border border-amber-200/10 bg-[rgba(255,255,255,0.03)] p-4">
-                <div className="text-xs uppercase tracking-[0.3em] text-amber-100/50">Base</div>
-                <div className="mt-2 text-sm text-stone-200">Lista para seguir creciendo</div>
+                <div className="mb-2">
+                  <BadgePill tone="success">Supabase</BadgePill>
+                </div>
+                <div className="text-sm text-stone-200">Lista para datos reales</div>
               </div>
             </div>
           </Panel>
