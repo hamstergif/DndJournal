@@ -1095,6 +1095,7 @@ export default function App() {
   const [campaignEditorMode, setCampaignEditorMode] = useState("");
   const [campaignDraft, setCampaignDraft] = useState(() => getEmptyCampaignDraft());
   const [campaignSubmitting, setCampaignSubmitting] = useState(false);
+  const [campaignDeleting, setCampaignDeleting] = useState(false);
 
   const [campaigns, setCampaigns] = useState([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState(() =>
@@ -1730,6 +1731,59 @@ export default function App() {
     }
   }
 
+  async function handleDeleteCampaign() {
+    if (!supabase || !selectedCampaignId || !selectedCampaign) return;
+
+    const confirmed =
+      typeof window === "undefined"
+        ? true
+        : window.confirm(
+            `Vas a borrar "${selectedCampaign.title}" con su bit\u00e1cora, personajes, misiones, locaciones, conocimiento, inventario y criaturas guardadas.\n\nEsta acci\u00f3n no se puede deshacer.\n\n\u00bfQuer\u00e9s seguir?`,
+          );
+
+    if (!confirmed) return;
+
+    setCampaignDeleting(true);
+    setAppError("");
+    setAppStatus("");
+
+    const deletingCampaignId = selectedCampaignId;
+    const nextCampaigns = campaigns.filter((campaign) => campaign.id !== deletingCampaignId);
+    const nextSelectedCampaignId = nextCampaigns[0]?.id || "";
+
+    try {
+      const { error } = await supabase.from("campaigns").delete().eq("id", deletingCampaignId);
+
+      if (error) throw error;
+
+      startTransition(() => {
+        setCampaigns(nextCampaigns);
+        setSelectedCampaignId(nextSelectedCampaignId);
+        setCampaignEditorMode(nextCampaigns.length ? "" : "create");
+        setCampaignDraft(getEmptyCampaignDraft());
+        setActiveTab("dashboard");
+      });
+
+      if (!nextSelectedCampaignId) {
+        setCollections(EMPTY_COLLECTIONS);
+        setMainJournalEntryId("");
+        setJournalBody("");
+        setSaveMessage("Cre\u00e1 una campa\u00f1a para empezar a escribir.");
+        setNoteDirty(false);
+      }
+
+      setAppStatus(
+        nextSelectedCampaignId
+          ? "Campa\u00f1a borrada. Ya ten\u00e9s otra campa\u00f1a activa."
+          : "Campa\u00f1a borrada. Pod\u00e9s crear una nueva cuando quieras.",
+      );
+    } catch (error) {
+      setAppError(error.message || "No pude borrar la campa\u00f1a.");
+    } finally {
+      setCampaignDeleting(false);
+    }
+  }
+
   async function persistOrder(sectionKey, nextItems) {
     const table = COLLECTION_TABLES[sectionKey];
     if (!table || !supabase) return;
@@ -2098,6 +2152,7 @@ export default function App() {
             onChange={handleCampaignDraftChange}
             onCancel={closeCampaignEditor}
             onSubmit={handleSaveCampaign}
+            deleting={campaignDeleting}
             submitting={campaignSubmitting}
           />
 
@@ -2121,7 +2176,9 @@ export default function App() {
             draft={campaignDraft}
             onChange={handleCampaignDraftChange}
             onCancel={closeCampaignEditor}
+            onDelete={handleDeleteCampaign}
             onSubmit={handleSaveCampaign}
+            deleting={campaignDeleting}
             submitting={campaignSubmitting}
           />
         ) : null}
