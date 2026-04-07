@@ -652,7 +652,7 @@ async function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrd
       const mergedCharacter = await mergeCharacterDraftWithImport(draft);
       const { character } = prepareCharacterForStorage(mergedCharacter);
       if (!character.name) {
-        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el texto pegado.");
+        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano.");
       }
       return {
         campaign_id: campaignId,
@@ -744,7 +744,7 @@ async function buildUpdatePayload(sectionKey, draft, userId) {
       const mergedCharacter = await mergeCharacterDraftWithImport(draft);
       const { character } = prepareCharacterForStorage(mergedCharacter);
       if (!character.name) {
-        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el texto pegado.");
+        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano.");
       }
       return {
         updated_by: userId,
@@ -816,15 +816,11 @@ function getSectionConfigs() {
     characters: {
       title: "Personajes",
       subtitle:
-        "Cada ficha puede guardar datos útiles del personaje, una referencia SRD y notas de apoyo para tener la hoja resumida a mano.",
+        "Cada ficha puede guardar datos útiles del personaje, una referencia SRD y una nota breve para tener la hoja resumida a mano.",
       eyebrow: "Mesa viva",
       icon: Users,
       emptyText: "Todavía no hay personajes cargados en esta campaña.",
-      validateDraft: (draft) =>
-        Boolean(
-          String(draft.name ?? "").trim() ||
-            String(draft.sheet_import ?? "").trim(),
-        ),
+      validateDraft: (draft) => Boolean(String(draft.name ?? "").trim()),
       fields: [
         { key: "name", label: "Nombre", required: true, placeholder: "Aryn" },
         { key: "class_name", label: "Clase", placeholder: "Druida" },
@@ -848,16 +844,6 @@ function getSectionConfigs() {
           type: "textarea",
           placeholder: "Qué necesito recordar de esta persona antes de jugar.",
           rows: 4,
-        },
-        {
-          key: "sheet_import",
-          label: "Texto o JSON de apoyo",
-          type: "textarea",
-          placeholder:
-            "Pegá acá texto o JSON exportado desde otra herramienta si querés completar datos más rápido.",
-          helpText:
-            "Es opcional. Si trae nombre, clase, nivel o raza, los usamos como respaldo al guardar.",
-          rows: 5,
         },
       ],
       renderDisplay: (item) => {
@@ -1828,10 +1814,6 @@ export default function App() {
 
       if (characterLevelOverflow) {
         setAppStatus(getLevelOverflowMessage());
-      } else if (sectionKey === "characters" && String(draft.sheet_import ?? "").trim()) {
-        setAppStatus(
-          "Personaje guardado con datos de apoyo. Si algo vino raro, podés corregirlo a mano.",
-        );
       }
     } catch (error) {
       setAppError(error.message || "No pude crear ese registro.");
@@ -1874,10 +1856,6 @@ export default function App() {
 
       if (characterLevelOverflow) {
         setAppStatus(getLevelOverflowMessage());
-      } else if (sectionKey === "characters" && String(draft.sheet_import ?? "").trim()) {
-        setAppStatus(
-          "Personaje actualizado con datos de apoyo. Si querés, podés retocar cualquier campo a mano.",
-        );
       }
     } catch (error) {
       setAppError(error.message || "No pude guardar los cambios.");
