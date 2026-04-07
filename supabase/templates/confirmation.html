@@ -1,0 +1,32 @@
+<div style="margin:0;padding:32px 16px;background:#120d0a;color:#f5efe6;font-family:Georgia,serif;">
+  <div style="max-width:640px;margin:0 auto;background:#1b1410;border:1px solid #5c4430;border-radius:20px;padding:32px;">
+    <p style="margin:0 0 8px;color:#d6b37a;letter-spacing:.18em;text-transform:uppercase;font-size:12px;">
+      Cronica de Campana
+    </p>
+    <h1 style="margin:0 0 20px;font-size:36px;line-height:1.1;color:#fff4df;">
+      Hey {{ if index .Data "display_name" }}{{ index .Data "display_name" }}{{ else }}aventurero{{ end }},
+    </h1>
+    <p style="margin:0 0 16px;font-size:18px;line-height:1.7;">
+      veo que queres estar mas ordenado con tus campanas... Me parece perfecto.
+    </p>
+    <p style="margin:0 0 24px;font-size:18px;line-height:1.7;">
+      Para poder loguearte, hace click aca para confirmar que este es tu correo:
+    </p>
+    <p style="margin:0 0 28px;">
+      <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#f2c96d;color:#2b1b0c;text-decoration:none;padding:14px 22px;border-radius:999px;font-weight:bold;">
+        Confirmar mi correo
+      </a>
+    </p>
+    <p style="margin:0 0 14px;font-size:17px;line-height:1.7;">
+      Ahora si, podes torturar a tu DM preguntandole el nombre a cada NPC que te cruces.
+    </p>
+    <p style="margin:0 0 18px;font-size:17px;line-height:1.7;">
+      MUAJAJAJAJA... <em>risa malevola</em>
+    </p>
+    <hr style="border:none;border-top:1px solid #4a382b;margin:24px 0;" />
+    <p style="margin:0;font-size:13px;line-height:1.6;color:#bba58a;">
+      Si el boton no funciona, usa este enlace:<br />
+      <a href="{{ .ConfirmationURL }}" style="color:#f2c96d;">{{ .ConfirmationURL }}</a>
+    </p>
+  </div>
+</div>

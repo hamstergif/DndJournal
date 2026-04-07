@@ -29,6 +29,11 @@ export function CreatureCard({ creature, actionLabel, onSave, onOpenDetail }) {
 
           <div className="absolute bottom-4 left-4 right-4">
             <h3 className="font-display text-2xl text-stone-100">{creature.name}</h3>
+            {creature.originalName && creature.originalName !== creature.name ? (
+              <p className="mt-1 text-xs uppercase tracking-[0.28em] text-amber-100/65">
+                {creature.originalName}
+              </p>
+            ) : null}
             <p className="mt-1 text-sm text-stone-300">
               {creature.size} · CA {creature.armorClass} · PG {creature.hitPoints}
             </p>
@@ -85,6 +90,11 @@ export function SavedCreatureCard({ creature, label, onRemove, onOpenDetail }) {
         <div>
           <div className="text-xs uppercase tracking-[0.3em] text-amber-100/45">{label}</div>
           <div className="mt-2 font-display text-2xl text-stone-100">{creature.name}</div>
+          {creature.originalName && creature.originalName !== creature.name ? (
+            <div className="mt-1 text-xs uppercase tracking-[0.28em] text-amber-100/65">
+              {creature.originalName}
+            </div>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-2">
             <BadgePill>CR {creature.challengeLabel}</BadgePill>
             <BadgePill tone="subtle">{creature.type}</BadgePill>

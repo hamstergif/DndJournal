@@ -4,12 +4,26 @@ import { ButtonPill, Panel, SectionTitle } from "./ui";
 
 function buildInitialDraft(fields) {
   return fields.reduce((accumulator, field) => {
-    accumulator[field.key] = field.defaultValue ?? "";
+    accumulator[field.key] = field.defaultValue ?? (field.type === "file" ? null : "");
     return accumulator;
   }, {});
 }
 
 function FieldInput({ field, value, onChange }) {
+  if (field.type === "file") {
+    return (
+      <div className="space-y-2">
+        <input
+          type="file"
+          accept={field.accept}
+          onChange={(event) => onChange(field.key, event.target.files?.[0] || null)}
+          className="block w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 py-3 text-sm text-stone-100 file:mr-4 file:rounded-full file:border-0 file:bg-amber-300/10 file:px-4 file:py-2 file:text-sm file:text-amber-100"
+        />
+        {value?.name ? <div className="text-xs text-stone-400">{value.name}</div> : null}
+      </div>
+    );
+  }
+
   if (field.type === "textarea") {
     return (
       <textarea
@@ -56,6 +70,7 @@ export function EditableSection({
   icon,
   items,
   fields,
+  validateDraft,
   loading,
   emptyText,
   onCreate,
@@ -69,10 +84,16 @@ export function EditableSection({
   const [editingDraft, setEditingDraft] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
-  const hasRequiredValue = useMemo(
-    () => fields.every((field) => !field.required || String(newDraft[field.key] ?? "").trim()),
-    [fields, newDraft],
-  );
+  const hasRequiredValue = useMemo(() => {
+    if (validateDraft) return validateDraft(newDraft);
+    return fields.every((field) => !field.required || String(newDraft[field.key] ?? "").trim());
+  }, [fields, newDraft, validateDraft]);
+
+  const canSaveEdit = useMemo(() => {
+    if (!editingId) return false;
+    if (validateDraft) return validateDraft(editingDraft);
+    return fields.every((field) => !field.required || String(editingDraft[field.key] ?? "").trim());
+  }, [editingDraft, editingId, fields, validateDraft]);
 
   const handleNewChange = (key, nextValue) => {
     setNewDraft((previous) => ({ ...previous, [key]: nextValue }));
@@ -97,7 +118,8 @@ export function EditableSection({
     setEditingId(item.id);
     setEditingDraft(
       fields.reduce((accumulator, field) => {
-        accumulator[field.key] = item[field.key] ?? field.defaultValue ?? "";
+        accumulator[field.key] =
+          field.type === "file" ? null : item[field.key] ?? field.defaultValue ?? "";
         return accumulator;
       }, {}),
     );
@@ -137,6 +159,9 @@ export function EditableSection({
                 {field.label}
               </span>
               <FieldInput field={field} value={newDraft[field.key]} onChange={handleNewChange} />
+              {field.helpText ? (
+                <p className="mt-2 text-xs leading-relaxed text-stone-400">{field.helpText}</p>
+              ) : null}
             </label>
           ))}
         </div>
@@ -228,12 +253,21 @@ export function EditableSection({
                               value={editingDraft[field.key]}
                               onChange={handleEditChange}
                             />
+                            {field.helpText ? (
+                              <p className="mt-2 text-xs leading-relaxed text-stone-400">
+                                {field.helpText}
+                              </p>
+                            ) : null}
                           </label>
                         ))}
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        <ButtonPill primary onClick={() => handleSaveEdit(item.id)} disabled={submitting}>
+                        <ButtonPill
+                          primary
+                          onClick={() => handleSaveEdit(item.id)}
+                          disabled={!canSaveEdit || submitting}
+                        >
                           <span className="inline-flex items-center gap-2">
                             <Save className="h-4 w-4" />
                             Guardar cambios

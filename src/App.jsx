@@ -16,15 +16,20 @@ import {
   Users,
 } from "lucide-react";
 import { BookOverlay } from "./components/BookOverlay";
+import { CampaignEditorPanel } from "./components/CampaignEditorPanel";
 import { CreatureCard, SavedCreatureCard } from "./components/CreatureCard";
 import { CreatureDetailModal } from "./components/CreatureDetailModal";
 import { EditableSection } from "./components/EditableSection";
 import { LoginScreen } from "./components/LoginScreen";
 import { SearchGroupPanel } from "./components/SearchGroupPanel";
 import { BadgePill, ButtonPill, MetricCard, Panel, SectionTitle } from "./components/ui";
-import { featuredCompanionIndices, featuredTransformationIndices } from "./data";
+import {
+  featuredCompanionIndices,
+  featuredElementalIndices,
+  featuredTransformationIndices,
+} from "./data";
+import { getCharacterReferences, mergeCharacterDraftWithImport } from "./lib/characterSheets";
 import { extractStructuredSuggestions } from "./lib/extractors";
-import { createStarterBundle, createStarterCampaignPayload } from "./lib/seed";
 import {
   formatChallengeRating,
   getCreatureDetail,
@@ -82,12 +87,69 @@ const COLLECTION_TABLES = {
   inventory: "inventory_items",
 };
 
+const CAMPAIGN_STATUS_OPTIONS = [
+  { value: "active", label: "Activa" },
+  { value: "paused", label: "Pausada" },
+  { value: "finished", label: "Finalizada" },
+  { value: "archived", label: "Archivada" },
+];
+
+const CAMPAIGN_ACCENTS = [
+  "from-amber-500/30 via-orange-500/15 to-rose-500/20",
+  "from-sky-400/25 via-cyan-500/10 to-indigo-500/20",
+  "from-emerald-400/20 via-lime-400/10 to-stone-400/20",
+  "from-red-500/25 via-orange-500/15 to-amber-400/20",
+  "from-fuchsia-500/20 via-rose-500/10 to-orange-400/20",
+];
+
 function normalizeText(value = "") {
   return value
     .toString()
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getEmptyCampaignDraft() {
+  return {
+    title: "",
+    status: "active",
+    setting: "",
+    summary: "",
+    focus: "",
+    next_move: "",
+    last_session_label: "",
+  };
+}
+
+function buildCampaignDraft(campaign) {
+  if (!campaign) return getEmptyCampaignDraft();
+
+  return {
+    title: campaign.title || "",
+    status: campaign.status || "active",
+    setting: campaign.setting || "",
+    summary: campaign.summary || "",
+    focus: campaign.focus || "",
+    next_move: campaign.next_move || "",
+    last_session_label: campaign.last_session_label || "",
+  };
+}
+
+function getCampaignAccent(seed = "") {
+  const normalizedSeed = normalizeText(seed);
+  if (!normalizedSeed) return CAMPAIGN_ACCENTS[0];
+
+  const hash = [...normalizedSeed].reduce(
+    (accumulator, char) => accumulator + char.charCodeAt(0),
+    0,
+  );
+
+  return CAMPAIGN_ACCENTS[hash % CAMPAIGN_ACCENTS.length];
+}
+
+function getSavedCreatureKindLabel(usageKind) {
+  return usageKind === "wildshape" ? "Forma" : "Mascota";
 }
 
 function getCampaignStatusLabel(status) {
@@ -126,15 +188,15 @@ function getKnowledgeKindLabel(kind) {
 
 function getKnowledgeVisibilityLabel(item) {
   if (item.visibility === "private") return "Solo vos";
-  return "Campana";
+  return "Campaña";
 }
 
 function getSuggestionKindLabel(kind) {
   return (
     {
       characters: "Personaje",
-      quests: "Mision",
-      locations: "Locacion",
+      quests: "Misión",
+      locations: "Locación",
       knowledge: "Conocimiento",
       inventory: "Objeto",
     }[kind] || "Dato"
@@ -145,8 +207,8 @@ function getSuggestionCreateLabel(kind) {
   return (
     {
       characters: "Crear personaje",
-      quests: "Crear mision",
-      locations: "Crear locacion",
+      quests: "Crear misión",
+      locations: "Crear locación",
       knowledge: "Guardar conocimiento",
       inventory: "Guardar objeto",
     }[kind] || "Crear"
@@ -172,6 +234,10 @@ function formatDate(dateValue) {
   }
 }
 
+function shouldIncludeMoonElementals(level, isMoonDruid) {
+  return isMoonDruid && level >= 10;
+}
+
 function getMoonWildshapeMaxChallenge(level) {
   if (level >= 18) return 6;
   if (level >= 15) return 5;
@@ -191,6 +257,54 @@ function getWildshapeMaxChallenge(level, isMoonDruid) {
   return isMoonDruid
     ? getMoonWildshapeMaxChallenge(level)
     : getStandardWildshapeMaxChallenge(level);
+}
+
+function matchesCreatureMoment(creature, filter) {
+  switch (filter) {
+    case "tank":
+      return (creature.hitPoints || 0) >= 30 || (creature.armorClass || 0) >= 13;
+    case "scout":
+      return (
+        (creature.abilityScores?.dexterity || 0) >= 14 ||
+        (creature.passivePerception || 0) >= 13 ||
+        creature.movementModes?.includes("climb")
+      );
+    case "fly":
+      return creature.movementModes?.includes("fly");
+    case "swim":
+      return creature.movementModes?.includes("swim");
+    case "climb":
+      return creature.movementModes?.includes("climb");
+    case "elemental":
+      return creature.typeKey === "elemental";
+    default:
+      return true;
+  }
+}
+
+function matchesChallengeFilter(creature, filter) {
+  if (!filter || filter === "any" || filter === "compatible") return true;
+  return creature.challengeLabel === filter;
+}
+
+function sortCreatures(items, sortBy) {
+  return [...items].sort((first, second) => {
+    switch (sortBy) {
+      case "hp":
+        return (second.hitPoints || 0) - (first.hitPoints || 0) || first.name.localeCompare(second.name);
+      case "ac":
+        return (second.armorClass || 0) - (first.armorClass || 0) || first.name.localeCompare(second.name);
+      case "name":
+        return first.name.localeCompare(second.name);
+      case "cr":
+      default:
+        if (first.challengeValue !== second.challengeValue) {
+          return first.challengeValue - second.challengeValue;
+        }
+
+        return first.name.localeCompare(second.name);
+    }
+  });
 }
 
 function mapSavedCreatureRow(row) {
@@ -254,15 +368,26 @@ function createSearchGroups(query, collections, journalBody) {
       icon: Users,
       items: collections.characters
         .filter((item) =>
-          [item.name, item.role_label, item.tag, item.summary]
+          [
+            item.name,
+            item.role_label,
+            item.tag,
+            item.summary,
+            item.class_name,
+            item.race,
+            item.speed,
+          ]
             .filter(Boolean)
             .some((value) => normalizeText(value).includes(normalizedQuery)),
         )
         .map((item) => ({
           title: item.name,
-          badge: item.tag || "Personaje",
-          meta: item.role_label || "Sin rol",
-          text: item.summary || "Sin nota aun.",
+          badge:
+            item.class_name && item.level
+              ? `${item.class_name} ${item.level}`
+              : item.tag || "Personaje",
+          meta: item.race || item.role_label || "Sin rol",
+          text: item.summary || "Sin nota aún.",
         })),
     },
     {
@@ -292,8 +417,8 @@ function createSearchGroups(query, collections, journalBody) {
         )
         .map((item) => ({
           title: item.title,
-          badge: item.location_type || "Locacion",
-          meta: "Mapa de campana",
+          badge: item.location_type || "Locación",
+          meta: "Mapa de campaña",
           text: item.detail || "Sin detalle.",
         })),
     },
@@ -302,14 +427,14 @@ function createSearchGroups(query, collections, journalBody) {
       icon: Brain,
       items: collections.knowledge
         .filter((item) =>
-          [item.title, item.body, getKnowledgeKindLabel(item.kind)]
+          [item.title, item.body, item.known_by, getKnowledgeKindLabel(item.kind)]
             .filter(Boolean)
             .some((value) => normalizeText(value).includes(normalizedQuery)),
         )
         .map((item) => ({
           title: item.title,
           badge: getKnowledgeKindLabel(item.kind),
-          meta: getKnowledgeVisibilityLabel(item),
+          meta: item.known_by ? `Lo sabe: ${item.known_by}` : getKnowledgeVisibilityLabel(item),
           text: item.body || "Sin detalle.",
         })),
     },
@@ -330,7 +455,7 @@ function createSearchGroups(query, collections, journalBody) {
         })),
     },
     {
-      title: "Bitacora",
+      title: "Bitácora",
       icon: BookOpen,
       items: journalBody
         .split(/\n+/)
@@ -340,7 +465,7 @@ function createSearchGroups(query, collections, journalBody) {
         .map((line, index) => ({
           title: `Entrada ${index + 1}`,
           badge: "Nota",
-          meta: "Bitacora principal",
+          meta: "Bitácora principal",
           text: line,
         })),
     },
@@ -351,11 +476,11 @@ function createSearchGroups(query, collections, journalBody) {
 
 function buildDossierMarkdown(campaign, collections, journalBody) {
   const lines = [
-    `# ${campaign?.title || "Campana"}`,
+    `# ${campaign?.title || "Campaña"}`,
     "",
     `- Estado: ${getCampaignStatusLabel(campaign?.status)}`,
-    `- Ambientacion: ${campaign?.setting || "Sin definir"}`,
-    `- Ultima referencia: ${campaign?.last_session_label || "Sin dato"}`,
+    `- Ambientación: ${campaign?.setting || "Sin definir"}`,
+    `- Última referencia: ${campaign?.last_session_label || "Sin dato"}`,
     "",
     "## Resumen",
     "",
@@ -365,7 +490,7 @@ function buildDossierMarkdown(campaign, collections, journalBody) {
     "",
     campaign?.focus || "Sin foco cargado.",
     "",
-    "## Proximo movimiento",
+    "## Próximo movimiento",
     "",
     campaign?.next_move || "Sin siguiente paso.",
     "",
@@ -374,7 +499,23 @@ function buildDossierMarkdown(campaign, collections, journalBody) {
   ];
 
   collections.characters.forEach((item) => {
-    lines.push(`- **${item.name}** · ${item.role_label || "Sin rol"} · ${item.tag || "Sin tag"}`);
+    const sheetBits = [
+      item.class_name ? `${item.class_name}${item.level ? ` ${item.level}` : ""}` : "",
+      item.race || "",
+      item.role_label || "",
+      item.tag || "",
+    ].filter(Boolean);
+    const combatBits = [
+      item.armor_class ? `CA ${item.armor_class}` : "",
+      item.hit_points ? `PG ${item.hit_points}` : "",
+      item.speed ? `Velocidad ${item.speed}` : "",
+      item.passive_perception ? `Percepción pasiva ${item.passive_perception}` : "",
+    ].filter(Boolean);
+
+    lines.push(`- **${item.name}** · ${sheetBits.join(" · ") || "Sin ficha"}`);
+    if (combatBits.length) {
+      lines.push(`  ${combatBits.join(" · ")}`);
+    }
     lines.push(`  ${item.summary || "Sin nota."}`);
   });
 
@@ -392,13 +533,15 @@ function buildDossierMarkdown(campaign, collections, journalBody) {
 
   lines.push("", "## Conocimiento", "");
   collections.knowledge.forEach((item) => {
-    lines.push(`- **${item.title}** · ${getKnowledgeKindLabel(item.kind)} · ${getKnowledgeVisibilityLabel(item)}`);
+    const knowledgeBits = [getKnowledgeKindLabel(item.kind), getKnowledgeVisibilityLabel(item)];
+    if (item.known_by) knowledgeBits.push(`Lo sabe: ${item.known_by}`);
+    lines.push(`- **${item.title}** · ${knowledgeBits.join(" · ")}`);
     lines.push(`  ${item.body || "Sin detalle."}`);
   });
 
   lines.push("", "## Sesiones", "");
   collections.sessions.forEach((item) => {
-    lines.push(`- **${item.title}** · ${item.session_number ? `Sesion ${item.session_number}` : "Sin numero"}`);
+    lines.push(`- **${item.title}** · ${item.session_number ? `Sesión ${item.session_number}` : "Sin número"}`);
     lines.push(`  ${item.recap || "Sin recap."}`);
   });
 
@@ -410,28 +553,41 @@ function buildDossierMarkdown(campaign, collections, journalBody) {
 
   lines.push("", "## Mascotas y formas", "");
   collections.savedCreatures.forEach((item) => {
-    lines.push(`- **${item.name}** · ${item.usageKind === "wildshape" ? "Forma" : "Compania"} · CR ${item.challengeLabel}`);
+    lines.push(`- **${item.name}** · ${getSavedCreatureKindLabel(item.usageKind)} · CR ${item.challengeLabel}`);
     lines.push(`  CA ${item.armorClass} · PG ${item.hitPoints} · ${item.speed}`);
   });
 
-  lines.push("", "## Bitacora principal", "", journalBody || "Sin notas aun.");
+  lines.push("", "## Bitácora principal", "", journalBody || "Sin notas aún.");
 
   return lines.join("\n");
 }
 
-function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrder) {
+async function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrder) {
   switch (sectionKey) {
-    case "characters":
+    case "characters": {
+      const character = await mergeCharacterDraftWithImport(draft);
+      if (!character.name) {
+        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el PDF.");
+      }
       return {
         campaign_id: campaignId,
         created_by: userId,
         updated_by: userId,
-        name: draft.name?.trim(),
-        role_label: draft.role_label?.trim() || null,
-        tag: draft.tag?.trim() || null,
-        summary: draft.summary?.trim() || null,
+        name: character.name,
+        role_label: character.role_label || null,
+        tag: character.tag || null,
+        summary: character.summary || null,
+        class_name: character.class_name || null,
+        level: character.level,
+        race: character.race || null,
+        armor_class: character.armor_class,
+        hit_points: character.hit_points,
+        speed: character.speed || null,
+        passive_perception: character.passive_perception,
+        sheet_reference_url: character.sheet_reference_url || null,
         sort_order: sortOrder,
       };
+    }
     case "quests":
       return {
         campaign_id: campaignId,
@@ -463,6 +619,7 @@ function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrder) {
         owner_user_id: isPrivate ? userId : null,
         title: draft.title?.trim(),
         body: draft.body?.trim() || null,
+        known_by: draft.known_by?.trim() || null,
         kind: draft.kind || "group",
         visibility: isPrivate ? "private" : "campaign",
         sort_order: sortOrder,
@@ -496,16 +653,29 @@ function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrder) {
   }
 }
 
-function buildUpdatePayload(sectionKey, draft, userId) {
+async function buildUpdatePayload(sectionKey, draft, userId) {
   switch (sectionKey) {
-    case "characters":
+    case "characters": {
+      const character = await mergeCharacterDraftWithImport(draft);
+      if (!character.name) {
+        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el PDF.");
+      }
       return {
         updated_by: userId,
-        name: draft.name?.trim(),
-        role_label: draft.role_label?.trim() || null,
-        tag: draft.tag?.trim() || null,
-        summary: draft.summary?.trim() || null,
+        name: character.name,
+        role_label: character.role_label || null,
+        tag: character.tag || null,
+        summary: character.summary || null,
+        class_name: character.class_name || null,
+        level: character.level,
+        race: character.race || null,
+        armor_class: character.armor_class,
+        hit_points: character.hit_points,
+        speed: character.speed || null,
+        passive_perception: character.passive_perception,
+        sheet_reference_url: character.sheet_reference_url || null,
       };
+    }
     case "quests":
       return {
         updated_by: userId,
@@ -528,6 +698,7 @@ function buildUpdatePayload(sectionKey, draft, userId) {
         owner_user_id: isPrivate ? userId : null,
         title: draft.title?.trim(),
         body: draft.body?.trim() || null,
+        known_by: draft.known_by?.trim() || null,
         kind: draft.kind || "group",
         visibility: isPrivate ? "private" : "campaign",
       };
@@ -558,47 +729,145 @@ function getSectionConfigs() {
   return {
     characters: {
       title: "Personajes",
-      subtitle: "Cada ficha puede editarse, ordenarse y dejar notas utiles a mano.",
+      subtitle:
+        "Cada ficha puede guardar datos útiles del personaje, una referencia SRD y una importación rápida desde PDF, texto o JSON.",
       eyebrow: "Mesa viva",
       icon: Users,
-      emptyText: "Todavia no hay personajes cargados en esta campana.",
+      emptyText: "Todavía no hay personajes cargados en esta campaña.",
+      validateDraft: (draft) =>
+        Boolean(
+          String(draft.name ?? "").trim() ||
+            draft.sheet_pdf ||
+            String(draft.sheet_import ?? "").trim(),
+        ),
       fields: [
         { key: "name", label: "Nombre", required: true, placeholder: "Aryn" },
-        { key: "role_label", label: "Rol", placeholder: "PJ · Druida" },
+        { key: "class_name", label: "Clase", placeholder: "Druida" },
+        { key: "level", label: "Nivel", type: "number", placeholder: "6" },
+        { key: "race", label: "Raza o linaje", placeholder: "Elfo del bosque" },
+        { key: "armor_class", label: "CA", type: "number", placeholder: "14" },
+        { key: "hit_points", label: "PG", type: "number", placeholder: "42" },
+        { key: "speed", label: "Velocidad", placeholder: "9 m · caminar" },
+        {
+          key: "passive_perception",
+          label: "Percepción pasiva",
+          type: "number",
+          placeholder: "15",
+        },
+        { key: "sheet_reference_url", label: "Link de hoja", placeholder: "https://..." },
+        {
+          key: "sheet_pdf",
+          label: "PDF de ficha",
+          type: "file",
+          accept: ".pdf,application/pdf",
+          helpText:
+            "Pensado para hojas en PDF. Intenta leer nombre, clase, nivel, raza, CA, PG, velocidad y percepción pasiva para que después solo corrijas lo fino.",
+        },
+        { key: "role_label", label: "Rol", placeholder: "PJ · druida" },
         { key: "tag", label: "Tag", placeholder: "Aliado, villano, contacto..." },
         {
           key: "summary",
           label: "Nota",
           type: "textarea",
-          placeholder: "Que necesito recordar de esta persona antes de jugar.",
+          placeholder: "Qué necesito recordar de esta persona antes de jugar.",
           rows: 4,
         },
+        {
+          key: "sheet_import",
+          label: "Texto o JSON de apoyo",
+          type: "textarea",
+          placeholder:
+            "Pegá acá texto o JSON de tu hoja si querés completar o corregir datos después del PDF.",
+          helpText:
+            "Sirve como respaldo cuando la hoja no viene en un PDF rellenable o cuando querés pegar datos exportados desde otra herramienta.",
+          rows: 5,
+        },
       ],
-      renderDisplay: (item) => (
-        <div>
-          <div className="flex flex-wrap gap-2">
-            {item.role_label ? <BadgePill>{item.role_label}</BadgePill> : null}
-            {item.tag ? <BadgePill tone="subtle">{item.tag}</BadgePill> : null}
+      renderDisplay: (item) => {
+        const references = getCharacterReferences(item);
+
+        return (
+          <div>
+            <div className="flex flex-wrap gap-2">
+              {item.class_name ? (
+                <BadgePill>{`${item.class_name}${item.level ? ` ${item.level}` : ""}`}</BadgePill>
+              ) : null}
+              {item.race ? <BadgePill tone="subtle">{item.race}</BadgePill> : null}
+              {item.role_label ? <BadgePill tone="subtle">{item.role_label}</BadgePill> : null}
+              {item.tag ? <BadgePill tone="subtle">{item.tag}</BadgePill> : null}
+            </div>
+            <h3 className="mt-4 font-display text-3xl text-stone-100">{item.name}</h3>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {item.armor_class ? (
+                <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
+                  CA {item.armor_class}
+                </div>
+              ) : null}
+              {item.hit_points ? (
+                <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
+                  PG {item.hit_points}
+                </div>
+              ) : null}
+              {item.speed ? (
+                <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
+                  {item.speed}
+                </div>
+              ) : null}
+              {item.passive_perception ? (
+                <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-3 text-sm text-stone-300">
+                  PP {item.passive_perception}
+                </div>
+              ) : null}
+            </div>
+
+            {(item.sheet_reference_url || references.length) ? (
+              <div className="mt-4 flex flex-wrap gap-3 text-sm">
+                {item.sheet_reference_url ? (
+                  <a
+                    href={item.sheet_reference_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-amber-100 transition hover:text-amber-50"
+                  >
+                    Abrir hoja
+                  </a>
+                ) : null}
+                {references.map((reference) => (
+                  <a
+                    key={reference.url}
+                    href={reference.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-amber-100 transition hover:text-amber-50"
+                  >
+                    {reference.label}
+                  </a>
+                ))}
+              </div>
+            ) : null}
+
+            <p className="mt-4 text-sm leading-relaxed text-stone-400">
+              {item.summary || "Sin nota aún."}
+            </p>
           </div>
-          <h3 className="mt-4 font-display text-3xl text-stone-100">{item.name}</h3>
-          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.summary || "Sin nota aun."}</p>
-        </div>
-      ),
+        );
+      },
     },
     quests: {
       title: "Misiones",
-      subtitle: "Ordena el frente activo de la mesa y deja cada objetivo con su propio contexto.",
+      subtitle: "Ordená el frente activo de la mesa y dejá cada objetivo con su propio contexto.",
       eyebrow: "Agenda",
       icon: Swords,
-      emptyText: "No hay misiones cargadas todavia.",
+      emptyText: "No hay misiones cargadas todavía.",
       fields: [
-        { key: "title", label: "Titulo", required: true, placeholder: "Seguir el carruaje negro" },
+        { key: "title", label: "Título", required: true, placeholder: "Seguir el carruaje negro" },
         { key: "status", label: "Estado", type: "select", defaultValue: "active", options: QUEST_STATUS_OPTIONS },
         {
           key: "detail",
           label: "Detalle",
           type: "textarea",
-          placeholder: "Que se sabe, que falta y por que importa.",
+          placeholder: "Qué se sabe, qué falta y por qué importa.",
           rows: 4,
         },
       ],
@@ -608,16 +877,16 @@ function getSectionConfigs() {
             <BadgePill>{getQuestStatusLabel(item.status)}</BadgePill>
           </div>
           <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
-          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail || "Sin detalle aun."}</p>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail || "Sin detalle aún."}</p>
         </div>
       ),
     },
     locations: {
       title: "Locaciones",
-      subtitle: "Mantene cada sitio con su propia ficha para ubicar pistas y escenas rapido.",
+      subtitle: "Mantené cada sitio con su propia ficha para ubicar pistas y escenas rápido.",
       eyebrow: "Mapa",
       icon: MapPin,
-      emptyText: "No hay locaciones cargadas aun.",
+      emptyText: "No hay locaciones cargadas aún.",
       fields: [
         { key: "title", label: "Nombre", required: true, placeholder: "Bosque del Sauce Hueco" },
         { key: "location_type", label: "Tipo", placeholder: "Refugio, zona, mazmorra..." },
@@ -625,7 +894,7 @@ function getSectionConfigs() {
           key: "detail",
           label: "Detalle",
           type: "textarea",
-          placeholder: "Que se recuerda de este lugar, sus riesgos o su tono.",
+          placeholder: "Qué se recuerda de este lugar, sus riesgos o su tono.",
           rows: 4,
         },
       ],
@@ -636,24 +905,25 @@ function getSectionConfigs() {
             {item.is_safe_haven ? <BadgePill tone="success">Refugio</BadgePill> : null}
           </div>
           <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
-          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail || "Sin detalle aun."}</p>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.detail || "Sin detalle aún."}</p>
         </div>
       ),
     },
     knowledge: {
       title: "Conocimiento",
-      subtitle: "Rumores, verdades y notas privadas para que no se pierda lo importante.",
+      subtitle: "Rumores, verdades y notas privadas para que no se pierda lo importante y quede claro quién lo sabe.",
       eyebrow: "Pistas",
       icon: Brain,
-      emptyText: "Todavia no hay conocimientos guardados.",
+      emptyText: "Todavía no hay conocimientos guardados.",
       fields: [
-        { key: "title", label: "Titulo", required: true, placeholder: "Melissandre sigue viva" },
+        { key: "title", label: "Título", required: true, placeholder: "Melissandre sigue viva" },
         { key: "kind", label: "Clase", type: "select", defaultValue: "group", options: KNOWLEDGE_KIND_OPTIONS },
+        { key: "known_by", label: "Lo sabe", placeholder: "Aryn, Benedicto, todo el grupo..." },
         {
           key: "body",
           label: "Detalle",
           type: "textarea",
-          placeholder: "Que se descubrio, que tan confiable es y para quien sirve.",
+          placeholder: "Qué se descubrió, qué tan confiable es y para quién sirve.",
           rows: 4,
         },
       ],
@@ -662,57 +932,58 @@ function getSectionConfigs() {
           <div className="flex flex-wrap gap-2">
             <BadgePill>{getKnowledgeKindLabel(item.kind)}</BadgePill>
             <BadgePill tone="subtle">{getKnowledgeVisibilityLabel(item)}</BadgePill>
+            {item.known_by ? <BadgePill tone="subtle">{`Lo sabe: ${item.known_by}`}</BadgePill> : null}
           </div>
           <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
-          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.body || "Sin detalle aun."}</p>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.body || "Sin detalle aún."}</p>
         </div>
       ),
     },
     sessions: {
       title: "Sesiones",
-      subtitle: "Cada recap se puede corregir y ordenar como un historial util para la campana.",
-      eyebrow: "Cronica",
+      subtitle: "Cada recap se puede corregir y ordenar como un historial útil para la campaña.",
+      eyebrow: "Crónica",
       icon: ScrollText,
-      emptyText: "No hay sesiones registradas todavia.",
+      emptyText: "No hay sesiones registradas todavía.",
       fields: [
-        { key: "title", label: "Titulo", required: true, placeholder: "Sesion 13 · El carruaje negro" },
-        { key: "session_number", label: "Numero", type: "number", placeholder: "13" },
+        { key: "title", label: "Título", required: true, placeholder: "Sesión 13 · El carruaje negro" },
+        { key: "session_number", label: "Número", type: "number", placeholder: "13" },
         { key: "played_on", label: "Fecha", type: "date" },
         {
           key: "recap",
           label: "Recap",
           type: "textarea",
-          placeholder: "Que paso, que quedo abierto y que deberia recordar el grupo.",
+          placeholder: "Qué pasó, qué quedó abierto y qué debería recordar el grupo.",
           rows: 5,
         },
       ],
       renderDisplay: (item) => (
         <div>
           <div className="flex flex-wrap gap-2">
-            {item.session_number ? <BadgePill>Sesion {item.session_number}</BadgePill> : null}
+            {item.session_number ? <BadgePill>Sesión {item.session_number}</BadgePill> : null}
             {item.played_on ? <BadgePill tone="subtle">{formatDate(item.played_on)}</BadgePill> : null}
           </div>
           <h3 className="mt-4 font-display text-3xl text-stone-100">{item.title}</h3>
-          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.recap || "Sin recap aun."}</p>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.recap || "Sin recap aún."}</p>
         </div>
       ),
     },
     inventory: {
       title: "Objetos",
-      subtitle: "Items, pistas fisicas y tesoros con cantidad, portador y notas cortas.",
+      subtitle: "Ítems, pistas físicas y tesoros con cantidad, portador y notas cortas.",
       eyebrow: "Inventario",
       icon: Package,
-      emptyText: "Todavia no hay objetos guardados.",
+      emptyText: "Todavía no hay objetos guardados.",
       fields: [
         { key: "name", label: "Nombre", required: true, placeholder: "Llave ennegrecida" },
-        { key: "item_type", label: "Tipo", placeholder: "Mision, tesoro, pista..." },
+        { key: "item_type", label: "Tipo", placeholder: "Misión, tesoro, pista..." },
         { key: "holder", label: "Portador", placeholder: "Grupo, Aryn..." },
         { key: "quantity", label: "Cantidad", type: "number", defaultValue: 1, placeholder: "1" },
         {
           key: "notes",
           label: "Nota",
           type: "textarea",
-          placeholder: "Por que importa, donde se consiguio o como se usa.",
+          placeholder: "Por qué importa, dónde se consiguió o cómo se usa.",
           rows: 4,
         },
       ],
@@ -724,7 +995,7 @@ function getSectionConfigs() {
             <BadgePill tone="subtle">x{item.quantity || 1}</BadgePill>
           </div>
           <h3 className="mt-4 font-display text-3xl text-stone-100">{item.name}</h3>
-          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.notes || "Sin nota aun."}</p>
+          <p className="mt-3 text-sm leading-relaxed text-stone-400">{item.notes || "Sin nota aún."}</p>
         </div>
       ),
     },
@@ -740,8 +1011,12 @@ export default function App() {
 
   const [appLoading, setAppLoading] = useState(true);
   const [appError, setAppError] = useState("");
+  const [appStatus, setAppStatus] = useState("");
   const [busySectionKey, setBusySectionKey] = useState("");
   const [busySuggestionId, setBusySuggestionId] = useState("");
+  const [campaignEditorMode, setCampaignEditorMode] = useState("");
+  const [campaignDraft, setCampaignDraft] = useState(() => getEmptyCampaignDraft());
+  const [campaignSubmitting, setCampaignSubmitting] = useState(false);
 
   const [campaigns, setCampaigns] = useState([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState(() =>
@@ -755,13 +1030,17 @@ export default function App() {
   const [collections, setCollections] = useState(EMPTY_COLLECTIONS);
   const [mainJournalEntryId, setMainJournalEntryId] = useState("");
   const [journalBody, setJournalBody] = useState("");
-  const [saveMessage, setSaveMessage] = useState("Los cambios de bitacora se guardan solos.");
+  const [saveMessage, setSaveMessage] = useState("Los cambios de bitácora se guardan solos.");
   const [noteDirty, setNoteDirty] = useState(false);
 
   const [druidLevel, setDruidLevel] = useState(6);
   const [isMoonDruid, setIsMoonDruid] = useState(true);
   const [wildshapeSearch, setWildshapeSearch] = useState("");
   const [companionSearch, setCompanionSearch] = useState("");
+  const [wildshapeMomentFilter, setWildshapeMomentFilter] = useState("all");
+  const [wildshapeCrFilter, setWildshapeCrFilter] = useState("compatible");
+  const [wildshapeSortBy, setWildshapeSortBy] = useState("cr");
+  const [companionCrFilter, setCompanionCrFilter] = useState("any");
   const [wildshapeState, setWildshapeState] = useState({
     loading: true,
     error: "",
@@ -783,6 +1062,7 @@ export default function App() {
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) || null;
   const userId = session?.user?.id || "";
   const wildshapeMaxChallenge = getWildshapeMaxChallenge(druidLevel, isMoonDruid);
+  const moonElementalsEnabled = shouldIncludeMoonElementals(druidLevel, isMoonDruid);
 
   const suggestionItems = useMemo(
     () =>
@@ -816,6 +1096,42 @@ export default function App() {
     () => collections.savedCreatures.filter((item) => item.usageKind !== "wildshape"),
     [collections.savedCreatures],
   );
+  const wildshapeCrOptions = useMemo(
+    () => [...new Set(wildshapeState.items.map((item) => item.challengeLabel))],
+    [wildshapeState.items],
+  );
+  const companionCrOptions = useMemo(
+    () => [...new Set(companionState.items.map((item) => item.challengeLabel))],
+    [companionState.items],
+  );
+  const filteredWildshapeItems = useMemo(() => {
+    const compatibleItems = wildshapeState.items.filter((creature) => {
+      if (creature.typeKey === "elemental") return moonElementalsEnabled;
+      return creature.challengeValue <= wildshapeMaxChallenge;
+    });
+
+    const sourceItems =
+      wildshapeCrFilter === "compatible"
+        ? compatibleItems
+        : wildshapeState.items.filter((creature) => matchesChallengeFilter(creature, wildshapeCrFilter));
+
+    return sortCreatures(
+      sourceItems.filter((creature) => matchesCreatureMoment(creature, wildshapeMomentFilter)),
+      wildshapeSortBy,
+    );
+  }, [
+    moonElementalsEnabled,
+    wildshapeCrFilter,
+    wildshapeMaxChallenge,
+    wildshapeMomentFilter,
+    wildshapeSortBy,
+    wildshapeState.items,
+  ]);
+  const filteredCompanionItems = useMemo(
+    () =>
+      companionState.items.filter((creature) => matchesChallengeFilter(creature, companionCrFilter)),
+    [companionCrFilter, companionState.items],
+  );
 
   useEffect(() => {
     if (!supabase) {
@@ -839,7 +1155,7 @@ export default function App() {
       })
       .catch((error) => {
         if (!mounted) return;
-        setAuthError(error.message || "No pude revisar la sesion actual.");
+        setAuthError(error.message || "No pude revisar la sesión actual.");
         setAuthLoading(false);
       });
 
@@ -854,6 +1170,9 @@ export default function App() {
         setSelectedCampaignId("");
         setMainJournalEntryId("");
         setJournalBody("");
+        setCampaignEditorMode("create");
+        setCampaignDraft(getEmptyCampaignDraft());
+        setAppStatus("");
         writeStorage(SELECTED_CAMPAIGN_KEY, null);
       }
 
@@ -889,6 +1208,7 @@ export default function App() {
     async function loadCampaigns() {
       setAppLoading(true);
       setAppError("");
+      setAppStatus("");
 
       try {
         const { data: existingCampaigns, error: campaignsError } = await supabase
@@ -898,27 +1218,7 @@ export default function App() {
 
         if (campaignsError) throw campaignsError;
 
-        let nextCampaigns = existingCampaigns || [];
-
-        if (!nextCampaigns.length) {
-          const starterCampaignPayload = createStarterCampaignPayload(session.user.id);
-          const { data: insertedCampaign, error: insertCampaignError } = await supabase
-            .from("campaigns")
-            .insert(starterCampaignPayload)
-            .select("*")
-            .single();
-
-          if (insertCampaignError) throw insertCampaignError;
-
-          const starterBundle = createStarterBundle(insertedCampaign.id, session.user.id);
-          await Promise.all(
-            Object.entries(starterBundle).map(([table, rows]) =>
-              rows.length ? supabase.from(table).insert(rows) : Promise.resolve(),
-            ),
-          );
-
-          nextCampaigns = [insertedCampaign];
-        }
+        const nextCampaigns = existingCampaigns || [];
 
         if (cancelled) return;
 
@@ -929,10 +1229,12 @@ export default function App() {
         startTransition(() => {
           setCampaigns(nextCampaigns);
           setSelectedCampaignId(nextSelection);
+          setCampaignEditorMode(nextCampaigns.length ? "" : "create");
+          setCampaignDraft(nextCampaigns.length ? getEmptyCampaignDraft() : buildCampaignDraft(null));
         });
       } catch (error) {
         if (!cancelled) {
-          setAppError(error.message || "No pude cargar las campanas.");
+          setAppError(error.message || "No pude cargar las campañas.");
         }
       } finally {
         if (!cancelled) {
@@ -949,7 +1251,14 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
-    if (!session || !selectedCampaignId || !supabase) return;
+    if (!session || !supabase) return;
+    if (!selectedCampaignId) {
+      setCollections(EMPTY_COLLECTIONS);
+      setMainJournalEntryId("");
+      setJournalBody("");
+      setSaveMessage("Creá una campaña para empezar a escribir.");
+      return;
+    }
 
     let cancelled = false;
 
@@ -1015,7 +1324,7 @@ export default function App() {
               campaign_id: selectedCampaignId,
               authored_by: session.user.id,
               updated_by: session.user.id,
-              title: "Bitacora principal",
+              title: "Bitácora principal",
               body: "",
               entry_type: "note",
               is_pinned: true,
@@ -1045,12 +1354,12 @@ export default function App() {
           });
           setMainJournalEntryId(mainEntry?.id || "");
           setJournalBody(mainEntry?.body || "");
-          setSaveMessage("Los cambios de bitacora se guardan solos.");
+          setSaveMessage("Los cambios de bitácora se guardan solos.");
           setNoteDirty(false);
         });
       } catch (error) {
         if (!cancelled) {
-          setAppError(error.message || "No pude cargar los datos de la campana.");
+          setAppError(error.message || "No pude cargar los datos de la campaña.");
         }
       } finally {
         if (!cancelled) {
@@ -1069,7 +1378,7 @@ export default function App() {
   useEffect(() => {
     if (!noteDirty || !mainJournalEntryId || !supabase || !session) return undefined;
 
-    setSaveMessage("Guardando bitacora...");
+    setSaveMessage("Guardando bitácora...");
 
     const timeoutId = window.setTimeout(async () => {
       const { error } = await supabase
@@ -1081,7 +1390,7 @@ export default function App() {
         .eq("id", mainJournalEntryId);
 
       if (error) {
-        setSaveMessage("No pude guardar la bitacora.");
+        setSaveMessage("No pude guardar la bitácora.");
         return;
       }
 
@@ -1092,7 +1401,7 @@ export default function App() {
         ),
       }));
       setNoteDirty(false);
-      setSaveMessage("Bitacora guardada.");
+      setSaveMessage("Bitácora guardada.");
     }, 900);
 
     return () => {
@@ -1109,11 +1418,12 @@ export default function App() {
 
       try {
         const [wildshapeItems, companionItems] = await Promise.all([
-          loadWildshapeCards(
-            wildshapeSearch.trim(),
-            wildshapeMaxChallenge,
-            featuredTransformationIndices,
-          ),
+          loadWildshapeCards(wildshapeSearch.trim(), {
+            maxChallengeRating: wildshapeMaxChallenge,
+            featuredIndices: featuredTransformationIndices,
+            elementalIndices: featuredElementalIndices,
+            includeElementals: moonElementalsEnabled,
+          }),
           loadCompanionCards(companionSearch.trim(), featuredCompanionIndices),
         ]);
 
@@ -1150,7 +1460,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [companionSearch, wildshapeMaxChallenge, wildshapeSearch]);
+  }, [companionSearch, moonElementalsEnabled, wildshapeMaxChallenge, wildshapeSearch]);
 
   async function handleSignIn({ email, password }) {
     if (!supabase) return;
@@ -1167,7 +1477,7 @@ export default function App() {
     if (error) {
       setAuthError(error.message);
     } else {
-      setAuthStatus("Sesion iniciada. Cargando tu campana...");
+      setAuthStatus("Sesión iniciada. Cargando tu campaña...");
     }
 
     setAuthLoading(false);
@@ -1237,6 +1547,93 @@ export default function App() {
     await supabase.auth.signOut();
   }
 
+  function handleCampaignDraftChange(key, value) {
+    setCampaignDraft((previous) => ({ ...previous, [key]: value }));
+  }
+
+  function openCreateCampaign() {
+    setCampaignEditorMode("create");
+    setCampaignDraft(getEmptyCampaignDraft());
+    setAppError("");
+    setAppStatus("");
+    setActiveTab("dashboard");
+  }
+
+  function openEditCampaign() {
+    if (!selectedCampaign) return;
+
+    setCampaignEditorMode("edit");
+    setCampaignDraft(buildCampaignDraft(selectedCampaign));
+    setAppError("");
+    setAppStatus("");
+    setActiveTab("dashboard");
+  }
+
+  function closeCampaignEditor() {
+    setCampaignEditorMode(campaigns.length ? "" : "create");
+    setCampaignDraft(getEmptyCampaignDraft());
+  }
+
+  async function handleSaveCampaign() {
+    if (!supabase || !userId || !campaignDraft.title.trim()) return;
+
+    setCampaignSubmitting(true);
+    setAppError("");
+    setAppStatus("");
+
+    const payload = {
+      owner_user_id: userId,
+      title: campaignDraft.title.trim(),
+      status: campaignDraft.status || "active",
+      setting: campaignDraft.setting.trim() || null,
+      summary: campaignDraft.summary.trim() || null,
+      focus: campaignDraft.focus.trim() || null,
+      next_move: campaignDraft.next_move.trim() || null,
+      last_session_label: campaignDraft.last_session_label.trim() || null,
+      accent: selectedCampaign?.accent || getCampaignAccent(campaignDraft.title),
+    };
+
+    try {
+      if (campaignEditorMode === "edit" && selectedCampaignId) {
+        const { data, error } = await supabase
+          .from("campaigns")
+          .update(payload)
+          .eq("id", selectedCampaignId)
+          .select("*")
+          .single();
+
+        if (error) throw error;
+
+        setCampaigns((previous) =>
+          previous.map((campaign) => (campaign.id === data.id ? data : campaign)),
+        );
+        setAppStatus("Campaña actualizada.");
+      } else {
+        const { data, error } = await supabase
+          .from("campaigns")
+          .insert({
+            ...payload,
+            accent: getCampaignAccent(campaignDraft.title),
+          })
+          .select("*")
+          .single();
+
+        if (error) throw error;
+
+        setCampaigns((previous) => [data, ...previous]);
+        setSelectedCampaignId(data.id);
+        setAppStatus("Campaña creada.");
+      }
+
+      setCampaignEditorMode("");
+      setCampaignDraft(getEmptyCampaignDraft());
+    } catch (error) {
+      setAppError(error.message || "No pude guardar la campaña.");
+    } finally {
+      setCampaignSubmitting(false);
+    }
+  }
+
   async function persistOrder(sectionKey, nextItems) {
     const table = COLLECTION_TABLES[sectionKey];
     if (!table || !supabase) return;
@@ -1253,10 +1650,17 @@ export default function App() {
 
     setBusySectionKey(sectionKey);
     setAppError("");
+    setAppStatus("");
 
     try {
       const nextSortOrder = collections[sectionKey].length;
-      const payload = buildInsertPayload(sectionKey, draft, selectedCampaignId, userId, nextSortOrder);
+      const payload = await buildInsertPayload(
+        sectionKey,
+        draft,
+        selectedCampaignId,
+        userId,
+        nextSortOrder,
+      );
       const table = COLLECTION_TABLES[sectionKey];
 
       const { data, error } = await supabase.from(table).insert(payload).select("*").single();
@@ -1266,6 +1670,12 @@ export default function App() {
         ...previous,
         [sectionKey]: sortByOrder([...previous[sectionKey], data]),
       }));
+
+      if (sectionKey === "characters" && (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())) {
+        setAppStatus(
+          "Personaje guardado con importación de ficha. Revisá los campos por si el PDF dejó algo para ajustar.",
+        );
+      }
     } catch (error) {
       setAppError(error.message || "No pude crear ese registro.");
       throw error;
@@ -1279,9 +1689,10 @@ export default function App() {
 
     setBusySectionKey(sectionKey);
     setAppError("");
+    setAppStatus("");
 
     try {
-      const payload = buildUpdatePayload(sectionKey, draft, userId);
+      const payload = await buildUpdatePayload(sectionKey, draft, userId);
       const table = COLLECTION_TABLES[sectionKey];
 
       const { data, error } = await supabase
@@ -1299,6 +1710,12 @@ export default function App() {
           previous[sectionKey].map((item) => (item.id === itemId ? data : item)),
         ),
       }));
+
+      if (sectionKey === "characters" && (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())) {
+        setAppStatus(
+          "Personaje actualizado con importación de ficha. Si querés, podés retocar a mano cualquier dato que el PDF no haya traído perfecto.",
+        );
+      }
     } catch (error) {
       setAppError(error.message || "No pude guardar los cambios.");
       throw error;
@@ -1373,13 +1790,14 @@ export default function App() {
   async function handleApplySuggestion(suggestion) {
     setBusySuggestionId(suggestion.id);
     setAppError("");
+    setAppStatus("");
 
     try {
       switch (suggestion.kind) {
         case "characters":
           await handleCreateItem("characters", {
             name: suggestion.title,
-            role_label: "Detectado en bitacora",
+            role_label: "Detectado en bitácora",
             tag: "Sugerencia",
             summary: suggestion.detail,
           });
@@ -1394,7 +1812,7 @@ export default function App() {
         case "locations":
           await handleCreateItem("locations", {
             title: suggestion.title,
-            location_type: "Detectada en bitacora",
+            location_type: "Detectada en bitácora",
             detail: suggestion.detail,
           });
           break;
@@ -1408,7 +1826,7 @@ export default function App() {
         case "inventory":
           await handleCreateItem("inventory", {
             name: suggestion.title,
-            item_type: "Detectado en bitacora",
+            item_type: "Detectado en bitácora",
             holder: "Grupo",
             quantity: 1,
             notes: suggestion.detail,
@@ -1417,6 +1835,8 @@ export default function App() {
         default:
           break;
       }
+
+      setAppStatus(`${getSuggestionKindLabel(suggestion.kind)} creado desde la bitácora.`);
     } finally {
       setBusySuggestionId("");
     }
@@ -1426,6 +1846,7 @@ export default function App() {
     if (!supabase || !selectedCampaignId || !userId) return;
 
     setAppError("");
+    setAppStatus("");
 
     const payload = {
       campaign_id: selectedCampaignId,
@@ -1475,6 +1896,7 @@ export default function App() {
         savedCreatures: [nextRow, ...filtered],
       };
     });
+    setAppStatus(usageKind === "wildshape" ? "Forma guardada." : "Mascota guardada.");
   }
 
   async function handleRemoveSavedCreature(usageKind, creatureIndex) {
@@ -1499,6 +1921,7 @@ export default function App() {
         (item) => !(item.index === creatureIndex && item.usageKind === usageKind),
       ),
     }));
+    setAppStatus(usageKind === "wildshape" ? "Forma eliminada." : "Mascota eliminada.");
   }
 
   async function openCreatureDetail(index) {
@@ -1525,26 +1948,63 @@ export default function App() {
   }
 
   function handleExportDossier() {
+    if (!selectedCampaign) return;
+
     const filename = `${normalizeText(selectedCampaign?.title || "campana").replace(/\s+/g, "-") || "campana"}.md`;
     const markdown = buildDossierMarkdown(selectedCampaign, collections, journalBody);
     downloadTextFile(filename, markdown);
   }
 
   function renderDashboard() {
+    if (!selectedCampaign) {
+      return (
+        <div className="grid gap-6">
+          <CampaignEditorPanel
+            mode="create"
+            draft={campaignDraft}
+            onChange={handleCampaignDraftChange}
+            onCancel={closeCampaignEditor}
+            onSubmit={handleSaveCampaign}
+            submitting={campaignSubmitting}
+          />
+
+          <Panel className="p-6">
+            <SectionTitle
+              icon={Sparkles}
+              eyebrow="Primer paso"
+              title="Arrancá limpio, pero separado"
+              subtitle="Las cuentas nuevas ya no reciben datos de muestra. Primero creás la campaña y desde ahí cada historia queda aislada con sus propias notas."
+            />
+          </Panel>
+        </div>
+      );
+    }
+
     return (
       <div className="grid gap-6">
+        {campaignEditorMode ? (
+          <CampaignEditorPanel
+            mode={campaignEditorMode}
+            draft={campaignDraft}
+            onChange={handleCampaignDraftChange}
+            onCancel={closeCampaignEditor}
+            onSubmit={handleSaveCampaign}
+            submitting={campaignSubmitting}
+          />
+        ) : null}
+
         <Panel className="overflow-hidden p-6 md:p-8">
           <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
             <div>
               <div className="inline-flex items-center gap-3 rounded-full border border-amber-200/15 bg-amber-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-amber-100/70">
                 <Sparkles className="h-4 w-4" />
-                Campana activa
+                Campaña activa
               </div>
               <h1 className="mt-5 font-display text-5xl leading-tight text-stone-50 md:text-6xl">
-                {selectedCampaign?.title || "Tu cronica"}
+                {selectedCampaign?.title || "Tu crónica"}
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-relaxed text-stone-300">
-                {selectedCampaign?.summary || "Todavia no cargaste un resumen para esta campana."}
+                {selectedCampaign?.summary || "Todavía no cargaste un resumen para esta campaña."}
               </p>
 
               <div className="mt-6 flex flex-wrap gap-2">
@@ -1559,13 +2019,13 @@ export default function App() {
                 <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.45)] p-5">
                   <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Foco actual</div>
                   <p className="mt-3 text-sm leading-relaxed text-stone-300">
-                    {selectedCampaign?.focus || "Aun no hay foco definido."}
+                    {selectedCampaign?.focus || "Aún no hay foco definido."}
                   </p>
                 </div>
                 <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.45)] p-5">
-                  <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Proximo movimiento</div>
+                  <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Próximo movimiento</div>
                   <p className="mt-3 text-sm leading-relaxed text-stone-300">
-                    {selectedCampaign?.next_move || "Aun no hay siguiente paso."}
+                    {selectedCampaign?.next_move || "Aún no hay siguiente paso."}
                   </p>
                 </div>
               </div>
@@ -1580,17 +2040,17 @@ export default function App() {
               <MetricCard
                 value={collections.quests.length}
                 label="Misiones"
-                hint="Objetivos vivos que podes ordenar segun prioridad."
+                hint="Objetivos vivos que podés ordenar según prioridad."
               />
               <MetricCard
                 value={collections.locations.length}
                 label="Locaciones"
-                hint="Lugares rapidos de ubicar antes de narrar."
+                hint="Lugares rápidos de ubicar antes de narrar."
               />
               <MetricCard
                 value={collections.savedCreatures.length}
                 label="Criaturas guardadas"
-                hint="Mascotas y formas listas para consultar sin salir de la pagina."
+                hint="Mascotas y formas listas para consultar sin salir de la página."
               />
             </div>
           </div>
@@ -1600,14 +2060,14 @@ export default function App() {
           <Panel className="p-6">
             <SectionTitle
               icon={BookOpen}
-              eyebrow="Bitacora"
-              title="Notas normales, pero utiles"
-              subtitle="Escribi recap, escenas, rumores y nombres. La app intenta sugerir entidades estructuradas a partir de ese texto."
+              eyebrow="Bitácora"
+              title="Notas normales, pero útiles"
+              subtitle="Escribí recap, escenas, rumores y nombres. Cada campaña guarda su propia bitácora y, si querés, te propone convertir líneas marcadas en datos estructurados."
             />
 
             <div className="mt-6 rounded-[26px] border border-amber-200/10 bg-[rgba(10,7,5,0.52)] p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm text-stone-300">Bitacora principal de la campana</div>
+                <div className="text-sm text-stone-300">Bitácora principal de la campaña</div>
                 <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">{saveMessage}</div>
               </div>
               <textarea
@@ -1618,7 +2078,7 @@ export default function App() {
                 }}
                 rows={14}
                 className="min-h-[280px] w-full resize-y rounded-[24px] border border-amber-200/10 bg-[rgba(16,11,9,0.82)] px-4 py-4 text-sm leading-7 text-stone-100 outline-none placeholder:text-stone-500"
-                placeholder="Escribi aca la sesion, sospechas, nombres propios, objetos raros o locaciones. Las sugerencias aparecen a la derecha."
+                placeholder="Escribí acá la sesión, sospechas, nombres propios, objetos raros o locaciones. Si querés sugerencias más confiables, usá líneas tipo NPC:, MISIÓN:, LUGAR:, OBJETO: o PISTA:."
               />
             </div>
 
@@ -1631,9 +2091,9 @@ export default function App() {
           <Panel className="p-6">
             <SectionTitle
               icon={Compass}
-              eyebrow="Lectura inteligente"
-              title="Sugerencias desde la bitacora"
-              subtitle="No reemplaza tu criterio de mesa, pero ayuda a capturar personajes, misiones, pistas y objetos sin recargar datos dos veces."
+              eyebrow="Lectura asistida"
+              title="Sugerencias desde la bitácora"
+              subtitle="Ahora prioriza líneas explícitas y deja de inventar de más. Lo más confiable es escribir prefijos como NPC:, MISIÓN:, LUGAR:, OBJETO: o PISTA:."
             />
 
             <div className="mt-6 space-y-3">
@@ -1664,7 +2124,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm leading-relaxed text-stone-400">
-                  Cuando la bitacora tenga nombres, rumores, objetivos, objetos o lugares claros, van a aparecer sugerencias aca.
+                  Probá algo como `NPC: Elric el herrero`, `MISIÓN: Seguir el carruaje negro`, `LUGAR: Capilla en ruinas`, `OBJETO: Llave ennegrecida` o `PISTA: Melissandre sigue viva`.
                 </div>
               )}
             </div>
@@ -1682,12 +2142,12 @@ export default function App() {
             icon={PawPrint}
             eyebrow="Mascotas y transformaciones"
             title="Biblioteca viva de criaturas"
-            subtitle="Guarda formas de druida, mascotas o aliados y abri la ficha completa dentro de la misma pagina."
+            subtitle="Guardá formas de druida, mascotas o aliados y abrí la ficha completa dentro de la misma página."
           />
 
           <div className="mt-6 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
             <div className="rounded-[24px] border border-amber-200/10 bg-[rgba(10,7,5,0.5)] p-4">
-              <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Reglas rapidas</div>
+              <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Reglas rápidas</div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="block">
                   <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
@@ -1705,26 +2165,27 @@ export default function App() {
 
                 <label className="block">
                   <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
-                    Circulo
+                    Círculo
                   </span>
                   <select
                     value={isMoonDruid ? "moon" : "standard"}
                     onChange={(event) => setIsMoonDruid(event.target.value === "moon")}
                     className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
                   >
-                    <option value="moon">Circulo de la Luna</option>
-                    <option value="standard">Druida comun</option>
+                    <option value="moon">Círculo de la Luna</option>
+                    <option value="standard">Druida común</option>
                   </select>
                 </label>
               </div>
 
               <div className="mt-4 rounded-[22px] border border-amber-200/10 bg-[rgba(16,11,9,0.82)] p-4 text-sm text-stone-300">
                 <div className="flex flex-wrap gap-2">
-                  <BadgePill>CR maximo {formatChallengeRating(wildshapeMaxChallenge)}</BadgePill>
+                  <BadgePill>CR máximo {formatChallengeRating(wildshapeMaxChallenge)}</BadgePill>
                   <BadgePill tone="subtle">{isMoonDruid ? "Luna" : "Forma base"}</BadgePill>
+                  {moonElementalsEnabled ? <BadgePill tone="success">Elementales habilitados</BadgePill> : null}
                 </div>
                 <p className="mt-3 leading-relaxed text-stone-400">
-                  La lista filtra por CR para acercarte rapido a opciones viables. Al abrir la ficha ves CA, PG, ataques, rasgos y acciones sin salir del journal.
+                  La lista filtra por CR y, si sos del Círculo de la Luna de nivel 10 o más, suma también los elementales SRD. Al abrir la ficha ves CA, PG, ataques, rasgos y acciones sin salir del journal.
                 </p>
               </div>
             </div>
@@ -1742,7 +2203,7 @@ export default function App() {
                 <div className="text-xs uppercase tracking-[0.28em] text-amber-100/45">Mascotas guardadas</div>
                 <div className="mt-3 font-display text-4xl text-amber-100">{savedCompanions.length}</div>
                 <p className="mt-2 text-sm text-stone-400">
-                  Animales, aliados o companias recurrentes con acceso rapido a la ficha.
+                  Animales, aliados o compañías recurrentes con acceso rápido a la ficha.
                 </p>
               </div>
             </div>
@@ -1754,16 +2215,56 @@ export default function App() {
               icon={Shield}
               eyebrow="Wildshape"
               title="Formas sugeridas"
-              subtitle="Buscalas por nombre o usa la lista destacada para tener alternativas ya preparadas."
+              subtitle="Buscalas por nombre y filtralas por momento de uso, CR u orden para tener a mano la mejor opción."
             />
 
-            <div className="mt-6">
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
               <input
                 value={wildshapeSearch}
                 onChange={(event) => setWildshapeSearch(event.target.value)}
-                placeholder="Buscar bestia por nombre..."
+                placeholder="Buscar bestia o elemental por nombre..."
                 className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
+
+              <select
+                value={wildshapeMomentFilter}
+                onChange={(event) => setWildshapeMomentFilter(event.target.value)}
+                className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+              >
+                <option value="all">Todo momento</option>
+                <option value="tank">Tanque</option>
+                <option value="scout">Exploración</option>
+                <option value="fly">Vuelo</option>
+                <option value="swim">Nado</option>
+                <option value="climb">Trepar</option>
+                {moonElementalsEnabled ? <option value="elemental">Elementales</option> : null}
+              </select>
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <select
+                value={wildshapeCrFilter}
+                onChange={(event) => setWildshapeCrFilter(event.target.value)}
+                className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+              >
+                <option value="compatible">CR compatible</option>
+                {wildshapeCrOptions.map((cr) => (
+                  <option key={cr} value={cr}>
+                    CR {cr}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={wildshapeSortBy}
+                onChange={(event) => setWildshapeSortBy(event.target.value)}
+                className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+              >
+                <option value="cr">Ordenar por CR</option>
+                <option value="hp">Ordenar por PG</option>
+                <option value="ac">Ordenar por CA</option>
+                <option value="name">Ordenar por nombre</option>
+              </select>
             </div>
 
             {wildshapeState.error ? (
@@ -1777,8 +2278,12 @@ export default function App() {
                 <div className="col-span-full rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
                   Cargando formas compatibles...
                 </div>
+              ) : !filteredWildshapeItems.length ? (
+                <div className="col-span-full rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
+                  No encontré formas para esos filtros.
+                </div>
               ) : (
-                wildshapeState.items.map((creature) => (
+                filteredWildshapeItems.map((creature) => (
                   <CreatureCard
                     key={`wildshape-${creature.index}`}
                     creature={creature}
@@ -1794,18 +2299,31 @@ export default function App() {
           <Panel className="p-6">
             <SectionTitle
               icon={PawPrint}
-              eyebrow="Compania"
+              eyebrow="Compañía"
               title="Mascotas y aliados"
-              subtitle="Una seccion separada para criaturas companeras, invocadas o adoptadas."
+              subtitle="Una sección separada para criaturas compañeras, invocadas o adoptadas."
             />
 
-            <div className="mt-6">
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
               <input
                 value={companionSearch}
                 onChange={(event) => setCompanionSearch(event.target.value)}
                 placeholder="Buscar criatura por nombre..."
                 className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
               />
+
+              <select
+                value={companionCrFilter}
+                onChange={(event) => setCompanionCrFilter(event.target.value)}
+                className="h-12 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+              >
+                <option value="any">Cualquier CR</option>
+                {companionCrOptions.map((cr) => (
+                  <option key={cr} value={cr}>
+                    CR {cr}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {companionState.error ? (
@@ -1819,8 +2337,12 @@ export default function App() {
                 <div className="col-span-full rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
                   Cargando criaturas recomendadas...
                 </div>
+              ) : !filteredCompanionItems.length ? (
+                <div className="col-span-full rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
+                  No encontré criaturas para ese CR.
+                </div>
               ) : (
-                companionState.items.map((creature) => (
+                filteredCompanionItems.map((creature) => (
                   <CreatureCard
                     key={`companion-${creature.index}`}
                     creature={creature}
@@ -1840,7 +2362,7 @@ export default function App() {
               icon={Shield}
               eyebrow="Preparadas"
               title="Tus formas guardadas"
-              subtitle="Abri la ficha completa o limpia la lista segun la necesidad del personaje."
+              subtitle="Abrí la ficha completa o limpiá la lista según la necesidad del personaje."
             />
 
             <div className="mt-6 space-y-4">
@@ -1856,7 +2378,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
-                  Todavia no guardaste formas. Usa la biblioteca de arriba para prepararlas.
+                  Todavía no guardaste formas. Usá la biblioteca de arriba para prepararlas.
                 </div>
               )}
             </div>
@@ -1865,9 +2387,9 @@ export default function App() {
           <Panel className="p-6">
             <SectionTitle
               icon={PawPrint}
-              eyebrow="Acompanamiento"
+              eyebrow="Acompañamiento"
               title="Tus mascotas guardadas"
-              subtitle="Pensado para companeros animales, criaturas adoptadas o apoyos frecuentes."
+              subtitle="Pensado para compañeros animales, criaturas adoptadas o apoyos frecuentes."
             />
 
             <div className="mt-6 space-y-4">
@@ -1883,7 +2405,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="rounded-[22px] border border-amber-200/10 bg-[rgba(10,7,5,0.55)] p-4 text-sm text-stone-400">
-                  Todavia no guardaste mascotas o criaturas companeras.
+                  Todavía no guardaste mascotas o criaturas compañeras.
                 </div>
               )}
             </div>
@@ -1894,6 +2416,10 @@ export default function App() {
   }
 
   function renderActiveSection() {
+    if (!selectedCampaign) {
+      return renderDashboard();
+    }
+
     if (activeTab === "dashboard") {
       return renderDashboard();
     }
@@ -1913,6 +2439,7 @@ export default function App() {
         icon={config.icon}
         items={collections[activeTab] || []}
         fields={config.fields}
+        validateDraft={config.validateDraft}
         loading={appLoading && !collections[activeTab]?.length}
         emptyText={config.emptyText}
         onCreate={(draft) => handleCreateItem(activeTab, draft)}
@@ -1948,34 +2475,36 @@ export default function App() {
             <div>
               <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">DyD journal</div>
               <div className="mt-2 font-display text-3xl text-stone-50">
-                {selectedCampaign?.title || "Cargando campana..."}
+                {selectedCampaign?.title || "Sin campaña activa"}
               </div>
               <p className="mt-2 max-w-2xl text-sm text-stone-400">
-                Diario de mesa responsive con auth real, secciones editables y acceso rapido a criaturas.
+                Diario de mesa responsive con auth real, secciones editables y acceso rápido a criaturas.
               </p>
             </div>
 
             <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center md:justify-end">
-              <label className="min-w-[220px]">
-                <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
-                  Campana
-                </span>
-                <select
-                  value={selectedCampaignId}
-                  onChange={(event) => setSelectedCampaignId(event.target.value)}
-                  className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
-                >
-                  {campaigns.map((campaign) => (
-                    <option key={campaign.id} value={campaign.id}>
-                      {campaign.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {campaigns.length ? (
+                <label className="min-w-[220px]">
+                  <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
+                    Campaña
+                  </span>
+                  <select
+                    value={selectedCampaignId}
+                    onChange={(event) => setSelectedCampaignId(event.target.value)}
+                    className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] px-4 text-sm text-stone-100 outline-none"
+                  >
+                    {campaigns.map((campaign) => (
+                      <option key={campaign.id} value={campaign.id}>
+                        {campaign.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
 
               <label className="min-w-[260px]">
                 <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
-                  Busqueda global
+                  Búsqueda global
                 </span>
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
@@ -1983,14 +2512,17 @@ export default function App() {
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Buscar nombres, pistas, objetos..."
+                    disabled={!selectedCampaign}
                     className="h-11 w-full rounded-2xl border border-amber-200/10 bg-[rgba(10,7,5,0.62)] pl-10 pr-4 text-sm text-stone-100 outline-none placeholder:text-stone-500"
                   />
                 </div>
               </label>
 
               <div className="flex gap-2 self-end md:self-auto">
-                <ButtonPill onClick={handleExportDossier}>Exportar</ButtonPill>
-                <ButtonPill onClick={() => setBookOpen(true)}>Bitacora</ButtonPill>
+                <ButtonPill onClick={openCreateCampaign}>Nueva campaña</ButtonPill>
+                {selectedCampaign ? <ButtonPill onClick={openEditCampaign}>Editar campaña</ButtonPill> : null}
+                <ButtonPill onClick={handleExportDossier} disabled={!selectedCampaign}>Exportar</ButtonPill>
+                <ButtonPill onClick={() => setBookOpen(true)} disabled={!selectedCampaign}>Bitácora</ButtonPill>
                 <ButtonPill onClick={handleSignOut}>
                   <span className="inline-flex items-center gap-2">
                     <LogOut className="h-4 w-4" />
@@ -2031,9 +2563,15 @@ export default function App() {
           </div>
         ) : null}
 
+        {appStatus ? (
+          <div className="mt-4 rounded-[24px] border border-emerald-300/20 bg-emerald-500/10 px-5 py-4 text-sm text-emerald-100">
+            {appStatus}
+          </div>
+        ) : null}
+
         {busySectionKey ? (
           <div className="mt-4 rounded-[24px] border border-amber-200/10 bg-amber-300/10 px-5 py-4 text-sm text-amber-100">
-            Guardando cambios en {sectionConfigs[busySectionKey]?.title?.toLowerCase() || "la seccion"}...
+            Guardando cambios en {sectionConfigs[busySectionKey]?.title?.toLowerCase() || "la sección"}...
           </div>
         ) : null}
 
@@ -2047,7 +2585,7 @@ export default function App() {
       <BookOverlay
         open={bookOpen}
         onClose={() => setBookOpen(false)}
-        campaignName={selectedCampaign?.title || "Bitacora"}
+        campaignName={selectedCampaign?.title || "Bitácora"}
         noteValue={journalBody}
         onNoteChange={(value) => {
           setJournalBody(value);

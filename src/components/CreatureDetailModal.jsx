@@ -52,6 +52,11 @@ export function CreatureDetailModal({ creature, loading, error, onClose }) {
                     <BadgePill tone="subtle">{creature.size}</BadgePill>
                   </div>
                   <h2 className="mt-4 font-display text-4xl text-stone-100">{creature.name}</h2>
+                  {creature.originalName && creature.originalName !== creature.name ? (
+                    <p className="mt-2 text-xs uppercase tracking-[0.3em] text-amber-100/70">
+                      {creature.originalName}
+                    </p>
+                  ) : null}
                   <p className="mt-2 text-sm text-stone-300">{creature.alignment || "Sin alineamiento"}</p>
                 </div>
               </div>

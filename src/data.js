@@ -205,6 +205,13 @@ export const featuredTransformationIndices = [
   "tiger",
 ];
 
+export const featuredElementalIndices = [
+  "air-elemental",
+  "earth-elemental",
+  "fire-elemental",
+  "water-elemental",
+];
+
 export const featuredCompanionIndices = [
   "pseudodragon",
   "blink-dog",
