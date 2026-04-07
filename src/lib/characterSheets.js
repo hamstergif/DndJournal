@@ -1,19 +1,3 @@
-let pdfJsPromise = null;
-
-async function getPdfJsLib() {
-  if (!pdfJsPromise) {
-    pdfJsPromise = Promise.all([
-      import("pdfjs-dist/build/pdf.mjs"),
-      import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
-    ]).then(([pdfjsLib, workerModule]) => {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = workerModule.default;
-      return pdfjsLib;
-    });
-  }
-
-  return pdfJsPromise;
-}
-
 function normalizeText(value = "") {
   return value
     .toString()
@@ -435,69 +419,12 @@ export function parseCharacterSheetImport(source = "") {
   return parseImportedJson(cleanSource) || parseImportedText(cleanSource);
 }
 
-async function extractTextFromPdfFile(file) {
-  if (!file) return "";
-
-  const pdfjsLib = await getPdfJsLib();
-  const pdfBytes = new Uint8Array(await file.arrayBuffer());
-  const loadingTask = pdfjsLib.getDocument({ data: pdfBytes });
-  const pdf = await loadingTask.promise;
-  const pages = [];
-
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const text = textContent.items
-      .map((item) => item.str)
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (text) pages.push(text);
-  }
-
-  return pages.join("\n");
-}
-
-async function extractCharacterImportValues(draft = {}) {
+export async function mergeCharacterDraftWithImport(draft = {}) {
   let imported = buildEmptyImport();
-
-  if (draft.sheet_pdf) {
-    const pdfText = await extractTextFromPdfFile(draft.sheet_pdf);
-    imported = mergeImportValues(imported, parseCharacterSheetImport(pdfText));
-  }
 
   if (draft.sheet_import) {
     imported = mergeImportValues(imported, parseCharacterSheetImport(draft.sheet_import));
   }
-
-  return imported;
-}
-
-export async function autofillCharacterDraftFromImport(draft = {}) {
-  const imported = await extractCharacterImportValues(draft);
-
-  return {
-    ...draft,
-    name: imported.name || cleanText(draft.name) || "",
-    role_label: cleanText(draft.role_label) || "",
-    tag: cleanText(draft.tag) || "",
-    summary: cleanText(draft.summary) || imported.summary || "",
-    class_name: imported.class_name || cleanText(draft.class_name) || "",
-    level: imported.level ?? toNullableInteger(draft.level),
-    race: imported.race || cleanText(draft.race) || "",
-    armor_class: imported.armor_class ?? toNullableInteger(draft.armor_class),
-    hit_points: imported.hit_points ?? toNullableInteger(draft.hit_points),
-    speed: imported.speed || cleanText(draft.speed) || "",
-    passive_perception:
-      imported.passive_perception ?? toNullableInteger(draft.passive_perception),
-    sheet_reference_url:
-      imported.sheet_reference_url || cleanText(draft.sheet_reference_url) || "",
-  };
-}
-
-export async function mergeCharacterDraftWithImport(draft = {}) {
-  const imported = await extractCharacterImportValues(draft);
 
   return {
     name: cleanText(draft.name) || imported.name || "",

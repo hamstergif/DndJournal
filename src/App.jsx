@@ -30,7 +30,6 @@ import {
   featuredTransformationIndices,
 } from "./data";
 import {
-  autofillCharacterDraftFromImport,
   getCharacterReferences,
   mergeCharacterDraftWithImport,
 } from "./lib/characterSheets";
@@ -653,7 +652,7 @@ async function buildInsertPayload(sectionKey, draft, campaignId, userId, sortOrd
       const mergedCharacter = await mergeCharacterDraftWithImport(draft);
       const { character } = prepareCharacterForStorage(mergedCharacter);
       if (!character.name) {
-        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el PDF.");
+        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el texto pegado.");
       }
       return {
         campaign_id: campaignId,
@@ -745,7 +744,7 @@ async function buildUpdatePayload(sectionKey, draft, userId) {
       const mergedCharacter = await mergeCharacterDraftWithImport(draft);
       const { character } = prepareCharacterForStorage(mergedCharacter);
       if (!character.name) {
-        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el PDF.");
+        throw new Error("No pude detectar el nombre en la ficha. Escribilo a mano o revisá el texto pegado.");
       }
       return {
         updated_by: userId,
@@ -817,14 +816,13 @@ function getSectionConfigs() {
     characters: {
       title: "Personajes",
       subtitle:
-        "Cada ficha puede guardar datos útiles del personaje, una referencia SRD y una importación rápida desde PDF, texto o JSON.",
+        "Cada ficha puede guardar datos útiles del personaje, una referencia SRD y notas de apoyo para tener la hoja resumida a mano.",
       eyebrow: "Mesa viva",
       icon: Users,
       emptyText: "Todavía no hay personajes cargados en esta campaña.",
       validateDraft: (draft) =>
         Boolean(
           String(draft.name ?? "").trim() ||
-            draft.sheet_pdf ||
             String(draft.sheet_import ?? "").trim(),
         ),
       fields: [
@@ -842,14 +840,6 @@ function getSectionConfigs() {
           placeholder: "15",
         },
         { key: "sheet_reference_url", label: "Link de hoja", placeholder: "https://..." },
-        {
-          key: "sheet_pdf",
-          label: "PDF de ficha",
-          type: "file",
-          accept: ".pdf,application/pdf",
-          helpText:
-            "Pensado para hojas en PDF. Intenta leer nombre, clase, nivel, raza, CA, PG, velocidad y percepción pasiva para que después solo corrijas lo fino.",
-        },
         { key: "role_label", label: "Rol", placeholder: "PJ · druida" },
         { key: "tag", label: "Tag", placeholder: "Aliado, villano, contacto..." },
         {
@@ -864,9 +854,9 @@ function getSectionConfigs() {
           label: "Texto o JSON de apoyo",
           type: "textarea",
           placeholder:
-            "Pegá acá texto o JSON de tu hoja si querés completar o corregir datos después del PDF.",
+            "Pegá acá texto o JSON exportado desde otra herramienta si querés completar datos más rápido.",
           helpText:
-            "Sirve como respaldo cuando la hoja no viene en un PDF rellenable o cuando querés pegar datos exportados desde otra herramienta.",
+            "Es opcional. Si trae nombre, clase, nivel o raza, los usamos como respaldo al guardar.",
           rows: 5,
         },
       ],
@@ -1224,43 +1214,9 @@ export default function App() {
     [companionCrFilter, companionState.items],
   );
 
-  async function handleSectionFieldChange(sectionKey, { fieldKey, value, draft }) {
+  function handleSectionFieldChange(sectionKey, fieldKey, value) {
     if (sectionKey === "characters" && fieldKey === "level" && Number(value) > 20) {
       setAppStatus(getLevelOverflowMessage());
-    }
-
-    if (sectionKey !== "characters") return null;
-
-    if (fieldKey !== "sheet_pdf" || !value) {
-      return null;
-    }
-
-    setAppError("");
-
-    try {
-      const autofilledDraft = await autofillCharacterDraftFromImport(draft);
-      const importedLevel = autofilledDraft.level;
-
-      return {
-        draftPatch: {
-          name: autofilledDraft.name || "",
-          class_name: autofilledDraft.class_name || "",
-          level: importedLevel ?? "",
-          race: autofilledDraft.race || "",
-          armor_class: autofilledDraft.armor_class ?? "",
-          hit_points: autofilledDraft.hit_points ?? "",
-          speed: autofilledDraft.speed || "",
-          passive_perception: autofilledDraft.passive_perception ?? "",
-          sheet_reference_url: autofilledDraft.sheet_reference_url || "",
-        },
-        statusMessage:
-          "Ficha detectada: completé nombre, clase, nivel, raza, CA, PG, velocidad y percepción pasiva desde el PDF.",
-      };
-    } catch (error) {
-      setAppError(error.message || "No pude leer ese PDF.");
-      return {
-        statusMessage: "No pude extraer datos del PDF. Podés completar la ficha a mano.",
-      };
     }
   }
 
@@ -1818,12 +1774,9 @@ export default function App() {
 
       if (characterLevelOverflow) {
         setAppStatus(getLevelOverflowMessage());
-      } else if (
-        sectionKey === "characters" &&
-        (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())
-      ) {
+      } else if (sectionKey === "characters" && String(draft.sheet_import ?? "").trim()) {
         setAppStatus(
-          "Personaje guardado con importación de ficha. Revisá los campos por si el PDF dejó algo para ajustar.",
+          "Personaje guardado con datos de apoyo. Si algo vino raro, podés corregirlo a mano.",
         );
       }
     } catch (error) {
@@ -1867,12 +1820,9 @@ export default function App() {
 
       if (characterLevelOverflow) {
         setAppStatus(getLevelOverflowMessage());
-      } else if (
-        sectionKey === "characters" &&
-        (draft.sheet_pdf || String(draft.sheet_import ?? "").trim())
-      ) {
+      } else if (sectionKey === "characters" && String(draft.sheet_import ?? "").trim()) {
         setAppStatus(
-          "Personaje actualizado con importación de ficha. Si querés, podés retocar a mano cualquier dato que el PDF no haya traído perfecto.",
+          "Personaje actualizado con datos de apoyo. Si querés, podés retocar cualquier campo a mano.",
         );
       }
     } catch (error) {
@@ -2662,7 +2612,7 @@ export default function App() {
         onUpdate={(itemId, draft) => handleUpdateItem(activeTab, itemId, draft)}
         onDelete={(itemId) => handleDeleteItem(activeTab, itemId)}
         onMove={(itemId, direction) => handleMoveItem(activeTab, itemId, direction)}
-        onFieldChange={(payload) => handleSectionFieldChange(activeTab, payload)}
+        onFieldChange={(fieldKey, value) => handleSectionFieldChange(activeTab, fieldKey, value)}
         renderDisplay={config.renderDisplay}
       />
     );
