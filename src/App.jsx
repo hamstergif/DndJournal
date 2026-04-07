@@ -2469,12 +2469,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(241,191,105,0.14),transparent_22%),linear-gradient(180deg,#120d0a_0%,#060403_100%)] text-stone-100">
-      <div className="mx-auto max-w-7xl px-4 py-5 md:px-6 md:py-6">
-        <Panel className="p-4 md:p-5">
+      <div className="mx-auto max-w-7xl px-3 py-4 pb-24 sm:px-4 md:px-6 md:py-6 md:pb-6">
+        <Panel className="p-4 sm:p-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <div className="text-xs uppercase tracking-[0.35em] text-amber-100/50">DyD journal</div>
-              <div className="mt-2 font-display text-3xl text-stone-50">
+              <div className="mt-2 font-display text-2xl text-stone-50 sm:text-3xl">
                 {selectedCampaign?.title || "Sin campaña activa"}
               </div>
               <p className="mt-2 max-w-2xl text-sm text-stone-400">
@@ -2482,9 +2482,9 @@ export default function App() {
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 md:flex-row md:flex-wrap md:items-center md:justify-end">
+            <div className="flex w-full flex-col gap-3 xl:w-auto xl:min-w-[22rem]">
               {campaigns.length ? (
-                <label className="min-w-[220px]">
+                <label className="w-full xl:min-w-[220px]">
                   <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
                     Campaña
                   </span>
@@ -2502,7 +2502,7 @@ export default function App() {
                 </label>
               ) : null}
 
-              <label className="min-w-[260px]">
+              <label className="w-full xl:min-w-[260px]">
                 <span className="mb-2 block text-xs uppercase tracking-[0.28em] text-amber-100/45">
                   Búsqueda global
                 </span>
@@ -2518,12 +2518,20 @@ export default function App() {
                 </div>
               </label>
 
-              <div className="flex gap-2 self-end md:self-auto">
-                <ButtonPill onClick={openCreateCampaign}>Nueva campaña</ButtonPill>
-                {selectedCampaign ? <ButtonPill onClick={openEditCampaign}>Editar campaña</ButtonPill> : null}
-                <ButtonPill onClick={handleExportDossier} disabled={!selectedCampaign}>Exportar</ButtonPill>
-                <ButtonPill onClick={() => setBookOpen(true)} disabled={!selectedCampaign}>Bitácora</ButtonPill>
-                <ButtonPill onClick={handleSignOut}>
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap xl:justify-end">
+                <ButtonPill onClick={openCreateCampaign} className="w-full sm:w-auto">Nueva campaña</ButtonPill>
+                {selectedCampaign ? (
+                  <ButtonPill onClick={openEditCampaign} className="w-full sm:w-auto">
+                    Editar campaña
+                  </ButtonPill>
+                ) : null}
+                <ButtonPill onClick={handleExportDossier} disabled={!selectedCampaign} className="w-full sm:w-auto">
+                  Exportar
+                </ButtonPill>
+                <ButtonPill onClick={() => setBookOpen(true)} disabled={!selectedCampaign} className="w-full sm:w-auto">
+                  Bitácora
+                </ButtonPill>
+                <ButtonPill onClick={handleSignOut} className="col-span-2 w-full sm:col-span-1 sm:w-auto">
                   <span className="inline-flex items-center gap-2">
                     <LogOut className="h-4 w-4" />
                     Salir
@@ -2533,7 +2541,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+          <div className="mt-5 hidden gap-2 overflow-x-auto pb-1 md:flex">
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = item.id === activeTab;
@@ -2580,6 +2588,31 @@ export default function App() {
         </div>
 
         <div className="mt-6">{renderActiveSection()}</div>
+      </div>
+
+      <div className="fixed inset-x-3 bottom-3 z-40 md:hidden">
+        <div className="hide-scrollbar flex gap-2 overflow-x-auto rounded-[24px] border border-amber-200/10 bg-[rgba(18,13,10,0.94)] p-2 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const active = item.id === activeTab;
+
+            return (
+              <button
+                key={`mobile-${item.id}`}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`flex min-w-[88px] shrink-0 flex-col items-center gap-1 rounded-[18px] px-3 py-2 text-[11px] transition ${
+                  active
+                    ? "bg-amber-300/12 text-amber-100"
+                    : "bg-transparent text-stone-400"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <BookOverlay

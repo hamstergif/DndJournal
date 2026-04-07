@@ -6,7 +6,7 @@ export function SearchGroupPanel({ groups, query }) {
   if (!query.trim()) return null;
 
   return (
-    <Panel className="p-6">
+    <Panel className="p-4 sm:p-6">
       <SectionTitle
         icon={Search}
         eyebrow="Búsqueda global"

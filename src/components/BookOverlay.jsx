@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { X } from "lucide-react";
-import { BadgePill } from "./ui";
+import { NotebookPen, X } from "lucide-react";
+import { BadgePill, ButtonPill } from "./ui";
 
 export function BookOverlay({
   open,
@@ -37,35 +37,36 @@ export function BookOverlay({
     <AnimatePresence>
       {open ? (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/75 p-0 backdrop-blur-sm sm:items-center sm:p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
         >
-        <motion.div
-          className="relative w-full max-w-6xl"
-          style={{ perspective: "2400px" }}
-          initial={{ opacity: 0, y: 30, scale: 0.96 }}
+          <motion.div
+            className="relative h-full w-full max-w-6xl sm:h-auto sm:max-h-[calc(100dvh-2rem)]"
+            style={{ perspective: "2400px" }}
+            initial={{ opacity: 0, y: 30, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.98 }}
             transition={{ duration: 0.28, ease: "easeOut" }}
           >
             <button
               onClick={onClose}
-              className="absolute right-2 top-2 z-20 rounded-full border border-amber-200/15 bg-[rgba(16,12,9,0.86)] p-2 text-stone-200"
+              className="absolute right-3 top-3 z-20 rounded-full border border-amber-200/15 bg-[rgba(16,12,9,0.86)] p-2 text-stone-200 sm:right-2 sm:top-2"
+              aria-label="Cerrar bitácora"
             >
               <X className="h-4 w-4" />
             </button>
 
             <motion.div
-              className="book-shell overflow-hidden rounded-[36px] border border-amber-200/15 bg-[#2c1f16] p-3 shadow-[0_30px_100px_rgba(0,0,0,0.55)]"
+              className="book-shell h-full overflow-hidden rounded-t-[30px] border border-amber-200/15 bg-[#2c1f16] p-2 shadow-[0_30px_100px_rgba(0,0,0,0.55)] sm:rounded-[36px] sm:p-3"
               initial={{ rotateX: 10, rotateY: -14 }}
               animate={{ rotateX: 0, rotateY: 0 }}
               transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
             >
-              <div className="grid min-h-[560px] overflow-hidden rounded-[30px] border border-amber-100/10 bg-[linear-gradient(135deg,#d8c39b_0%,#c8ad82_100%)] text-[#3b2b1d] lg:grid-cols-2">
+              <div className="grid h-full min-h-[100dvh] overflow-hidden rounded-t-[24px] border border-amber-100/10 bg-[linear-gradient(135deg,#d8c39b_0%,#c8ad82_100%)] text-[#3b2b1d] sm:min-h-[560px] sm:max-h-[calc(100dvh-2.5rem)] sm:rounded-[30px] lg:grid-cols-2">
                 <motion.div
-                  className="relative border-b border-[#7e5e34]/15 p-6 md:p-8 lg:border-b-0 lg:border-r"
+                  className="relative hidden border-r border-[#7e5e34]/15 p-8 lg:block"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.22, duration: 0.35 }}
@@ -137,39 +138,79 @@ export function BookOverlay({
                 </motion.div>
 
                 <motion.div
-                  className="relative p-6 md:p-8"
+                  className="relative flex min-h-0 flex-col p-4 sm:p-6 md:p-8"
                   initial={{ opacity: 0, x: 24 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.42, duration: 0.35 }}
                 >
                   <div className="absolute inset-y-0 left-0 hidden w-10 bg-gradient-to-r from-[#8f6d40]/30 to-transparent lg:block" />
-                  <p className="text-xs uppercase tracking-[0.35em] text-[#7a5b35]">Escritura</p>
+
+                  <div className="flex items-start justify-between gap-3 border-b border-[#7e5e34]/15 pb-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.35em] text-[#7a5b35]">
+                        Escritura
+                      </p>
+                      <h3 className="mt-2 font-display text-2xl text-[#362516] sm:hidden">
+                        {campaignName}
+                      </h3>
+                      <p className="mt-2 max-w-xl text-sm leading-relaxed text-[#6c5234] sm:hidden">
+                        Acá prioricé una hoja limpia para celular: menos adorno, más espacio para
+                        escribir.
+                      </p>
+                    </div>
+                    <BadgePill tone="subtle" className="shrink-0 border-[#7e5e34]/25 bg-[#f0deb7]/55 text-[#6c5234]">
+                      {saveMessage}
+                    </BadgePill>
+                  </div>
+
                   <motion.div
-                    className="mt-5 rounded-[24px] border border-[#7e5e34]/20 bg-[#f5e7c3]/62 p-4"
+                    className="mt-4 flex min-h-0 flex-1 flex-col rounded-[24px] border border-[#7e5e34]/20 bg-[#f5e7c3]/62 p-4"
                     initial={{ rotateY: 8, opacity: 0 }}
                     animate={{ rotateY: 0, opacity: 1 }}
                     transition={{ delay: 0.52, duration: 0.34 }}
                   >
                     <div className="mb-3 flex items-center justify-between gap-3 text-sm text-[#6c5234]">
-                      <span>Nueva entrada</span>
-                      <span>{saveMessage}</span>
+                      <span className="inline-flex items-center gap-2">
+                        <NotebookPen className="h-4 w-4" />
+                        Nueva entrada
+                      </span>
+                      <span className="hidden text-xs uppercase tracking-[0.28em] text-[#7a5b35] sm:inline">
+                        Bitácora viva
+                      </span>
                     </div>
+
                     <textarea
                       value={noteValue}
                       onChange={(event) => onNoteChange(event.target.value)}
-                      className="min-h-[320px] w-full resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[#8c7150]"
-                      placeholder="Escribí aquí como si fuera la libreta del grupo: recap, sospechas, loot, nombres, pistas..."
+                      className="mobile-book-textarea min-h-[52dvh] w-full flex-1 resize-none bg-transparent text-[16px] leading-7 outline-none placeholder:text-[#8c7150] sm:min-h-[320px]"
+                      placeholder="Escribí acá como si fuera la libreta del grupo: recap, sospechas, loot, nombres, pistas..."
                     />
                   </motion.div>
+
                   <motion.div
-                    className="mt-4 flex flex-wrap gap-2 text-xs text-[#6c5234]"
+                    className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.7, duration: 0.22 }}
                   >
-                    <BadgePill tone="subtle">Recap rápido</BadgePill>
-                    <BadgePill tone="subtle">Teoría de mesa</BadgePill>
-                    <BadgePill tone="subtle">Pistas vivas</BadgePill>
+                    <div className="flex flex-wrap gap-2 text-xs text-[#6c5234]">
+                      <BadgePill tone="subtle" className="border-[#7e5e34]/25 bg-[#f0deb7]/55 text-[#6c5234]">
+                        Recap rápido
+                      </BadgePill>
+                      <BadgePill tone="subtle" className="border-[#7e5e34]/25 bg-[#f0deb7]/55 text-[#6c5234]">
+                        Teoría de mesa
+                      </BadgePill>
+                      <BadgePill tone="subtle" className="border-[#7e5e34]/25 bg-[#f0deb7]/55 text-[#6c5234]">
+                        Pistas vivas
+                      </BadgePill>
+                    </div>
+
+                    <ButtonPill
+                      onClick={onClose}
+                      className="w-full border-[#7e5e34]/25 bg-[#2f2116] text-amber-50 hover:bg-[#3b291b] sm:w-auto"
+                    >
+                      Cerrar bitácora
+                    </ButtonPill>
                   </motion.div>
                 </motion.div>
               </div>

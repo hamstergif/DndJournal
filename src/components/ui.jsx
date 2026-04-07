@@ -40,7 +40,7 @@ export function ButtonPill({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-2xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+      className={`inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
         primary
           ? "bg-amber-300 text-stone-950 hover:bg-amber-200"
           : "border border-amber-200/15 bg-[rgba(14,10,8,0.68)] text-stone-100 hover:bg-[rgba(26,20,16,0.92)]"
@@ -61,7 +61,7 @@ export function SectionTitle({ icon: Icon, eyebrow, title, subtitle }) {
         {eyebrow ? (
           <p className="text-xs uppercase tracking-[0.35em] text-amber-100/50">{eyebrow}</p>
         ) : null}
-        <h2 className="font-display text-2xl font-semibold text-stone-100">{title}</h2>
+        <h2 className="font-display text-xl font-semibold text-stone-100 sm:text-2xl">{title}</h2>
         <p className="mt-1 max-w-2xl text-sm text-stone-400">{subtitle}</p>
       </div>
     </div>

@@ -120,3 +120,22 @@ textarea {
 textarea {
   font-family: var(--font-literary);
 }
+
+.mobile-book-textarea {
+  overscroll-behavior: contain;
+}
+
+.mobile-book-textarea::-webkit-scrollbar {
+  width: 10px;
+}
+
+.mobile-book-textarea::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(122, 91, 53, 0.36);
+}
+
+@media (max-width: 767px) {
+  .book-shell {
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.42);
+  }
+}
