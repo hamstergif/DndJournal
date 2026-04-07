@@ -29,7 +29,11 @@ import {
   featuredElementalIndices,
   featuredTransformationIndices,
 } from "./data";
-import { getCharacterReferences, mergeCharacterDraftWithImport } from "./lib/characterSheets";
+import {
+  autofillCharacterDraftFromImport,
+  getCharacterReferences,
+  mergeCharacterDraftWithImport,
+} from "./lib/characterSheets";
 import { extractStructuredSuggestions } from "./lib/extractors";
 import {
   formatChallengeRating,
@@ -1220,9 +1224,43 @@ export default function App() {
     [companionCrFilter, companionState.items],
   );
 
-  function handleSectionFieldChange(sectionKey, fieldKey, nextValue) {
-    if (sectionKey === "characters" && fieldKey === "level" && Number(nextValue) > 20) {
+  async function handleSectionFieldChange(sectionKey, { fieldKey, value, draft }) {
+    if (sectionKey === "characters" && fieldKey === "level" && Number(value) > 20) {
       setAppStatus(getLevelOverflowMessage());
+    }
+
+    if (sectionKey !== "characters") return null;
+
+    if (fieldKey !== "sheet_pdf" || !value) {
+      return null;
+    }
+
+    setAppError("");
+
+    try {
+      const autofilledDraft = await autofillCharacterDraftFromImport(draft);
+      const importedLevel = autofilledDraft.level;
+
+      return {
+        draftPatch: {
+          name: autofilledDraft.name || "",
+          class_name: autofilledDraft.class_name || "",
+          level: importedLevel ?? "",
+          race: autofilledDraft.race || "",
+          armor_class: autofilledDraft.armor_class ?? "",
+          hit_points: autofilledDraft.hit_points ?? "",
+          speed: autofilledDraft.speed || "",
+          passive_perception: autofilledDraft.passive_perception ?? "",
+          sheet_reference_url: autofilledDraft.sheet_reference_url || "",
+        },
+        statusMessage:
+          "Ficha detectada: completé nombre, clase, nivel, raza, CA, PG, velocidad y percepción pasiva desde el PDF.",
+      };
+    } catch (error) {
+      setAppError(error.message || "No pude leer ese PDF.");
+      return {
+        statusMessage: "No pude extraer datos del PDF. Podés completar la ficha a mano.",
+      };
     }
   }
 
@@ -2624,7 +2662,7 @@ export default function App() {
         onUpdate={(itemId, draft) => handleUpdateItem(activeTab, itemId, draft)}
         onDelete={(itemId) => handleDeleteItem(activeTab, itemId)}
         onMove={(itemId, direction) => handleMoveItem(activeTab, itemId, direction)}
-        onFieldChange={(fieldKey, value) => handleSectionFieldChange(activeTab, fieldKey, value)}
+        onFieldChange={(payload) => handleSectionFieldChange(activeTab, payload)}
         renderDisplay={config.renderDisplay}
       />
     );

@@ -459,7 +459,7 @@ async function extractTextFromPdfFile(file) {
   return pages.join("\n");
 }
 
-export async function mergeCharacterDraftWithImport(draft = {}) {
+async function extractCharacterImportValues(draft = {}) {
   let imported = buildEmptyImport();
 
   if (draft.sheet_pdf) {
@@ -470,6 +470,34 @@ export async function mergeCharacterDraftWithImport(draft = {}) {
   if (draft.sheet_import) {
     imported = mergeImportValues(imported, parseCharacterSheetImport(draft.sheet_import));
   }
+
+  return imported;
+}
+
+export async function autofillCharacterDraftFromImport(draft = {}) {
+  const imported = await extractCharacterImportValues(draft);
+
+  return {
+    ...draft,
+    name: imported.name || cleanText(draft.name) || "",
+    role_label: cleanText(draft.role_label) || "",
+    tag: cleanText(draft.tag) || "",
+    summary: cleanText(draft.summary) || imported.summary || "",
+    class_name: imported.class_name || cleanText(draft.class_name) || "",
+    level: imported.level ?? toNullableInteger(draft.level),
+    race: imported.race || cleanText(draft.race) || "",
+    armor_class: imported.armor_class ?? toNullableInteger(draft.armor_class),
+    hit_points: imported.hit_points ?? toNullableInteger(draft.hit_points),
+    speed: imported.speed || cleanText(draft.speed) || "",
+    passive_perception:
+      imported.passive_perception ?? toNullableInteger(draft.passive_perception),
+    sheet_reference_url:
+      imported.sheet_reference_url || cleanText(draft.sheet_reference_url) || "",
+  };
+}
+
+export async function mergeCharacterDraftWithImport(draft = {}) {
+  const imported = await extractCharacterImportValues(draft);
 
   return {
     name: cleanText(draft.name) || imported.name || "",

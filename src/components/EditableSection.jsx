@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { ButtonPill, Panel, SectionTitle } from "./ui";
 
@@ -87,6 +87,9 @@ export function EditableSection({
   const [editingId, setEditingId] = useState("");
   const [editingDraft, setEditingDraft] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [draftAssistBusy, setDraftAssistBusy] = useState(false);
+  const [draftAssistMessage, setDraftAssistMessage] = useState("");
+  const changeRequestRef = useRef(0);
 
   const hasRequiredValue = useMemo(() => {
     if (validateDraft) return validateDraft(newDraft);
@@ -99,14 +102,87 @@ export function EditableSection({
     return fields.every((field) => !field.required || String(editingDraft[field.key] ?? "").trim());
   }, [editingDraft, editingId, fields, validateDraft]);
 
+  const applyDraftAssistResult = (setter, result) => {
+    if (!result) return;
+
+    if (result.draftPatch) {
+      setter((previous) => ({ ...previous, ...result.draftPatch }));
+    }
+
+    if (result.statusMessage !== undefined) {
+      setDraftAssistMessage(result.statusMessage || "");
+    }
+  };
+
   const handleNewChange = (key, nextValue) => {
-    onFieldChange?.(key, nextValue);
-    setNewDraft((previous) => ({ ...previous, [key]: nextValue }));
+    const nextDraft = { ...newDraft, [key]: nextValue };
+    setNewDraft(nextDraft);
+
+    const result = onFieldChange?.({
+      fieldKey: key,
+      value: nextValue,
+      mode: "create",
+      draft: nextDraft,
+      item: null,
+    });
+
+    if (result?.then) {
+      const requestId = ++changeRequestRef.current;
+      setDraftAssistBusy(true);
+      result
+        .then((resolvedResult) => {
+          if (requestId !== changeRequestRef.current) return;
+          applyDraftAssistResult(setNewDraft, resolvedResult);
+        })
+        .catch(() => {
+          if (requestId !== changeRequestRef.current) return;
+          setDraftAssistMessage("No pude aplicar la ficha automáticamente.");
+        })
+        .finally(() => {
+          if (requestId === changeRequestRef.current) {
+            setDraftAssistBusy(false);
+          }
+        });
+      return;
+    }
+
+    applyDraftAssistResult(setNewDraft, result);
   };
 
   const handleEditChange = (key, nextValue) => {
-    onFieldChange?.(key, nextValue);
-    setEditingDraft((previous) => ({ ...previous, [key]: nextValue }));
+    const nextDraft = { ...editingDraft, [key]: nextValue };
+    setEditingDraft(nextDraft);
+
+    const currentItem = items.find((item) => item.id === editingId) || null;
+    const result = onFieldChange?.({
+      fieldKey: key,
+      value: nextValue,
+      mode: "edit",
+      draft: nextDraft,
+      item: currentItem,
+    });
+
+    if (result?.then) {
+      const requestId = ++changeRequestRef.current;
+      setDraftAssistBusy(true);
+      result
+        .then((resolvedResult) => {
+          if (requestId !== changeRequestRef.current) return;
+          applyDraftAssistResult(setEditingDraft, resolvedResult);
+        })
+        .catch(() => {
+          if (requestId !== changeRequestRef.current) return;
+          setDraftAssistMessage("No pude aplicar la ficha automáticamente.");
+        })
+        .finally(() => {
+          if (requestId === changeRequestRef.current) {
+            setDraftAssistBusy(false);
+          }
+        });
+      return;
+    }
+
+    applyDraftAssistResult(setEditingDraft, result);
   };
 
   const handleCreate = async () => {
@@ -115,6 +191,7 @@ export function EditableSection({
     try {
       await onCreate(newDraft);
       setNewDraft(buildInitialDraft(fields));
+      setDraftAssistMessage("");
     } finally {
       setSubmitting(false);
     }
@@ -122,6 +199,7 @@ export function EditableSection({
 
   const startEditing = (item) => {
     setEditingId(item.id);
+    setDraftAssistMessage("");
     setEditingDraft(
       fields.reduce((accumulator, field) => {
         accumulator[field.key] =
@@ -138,6 +216,7 @@ export function EditableSection({
       await onUpdate(id, editingDraft);
       setEditingId("");
       setEditingDraft({});
+      setDraftAssistMessage("");
     } finally {
       setSubmitting(false);
     }
@@ -173,10 +252,22 @@ export function EditableSection({
         </div>
 
         <div className="mt-4">
-          <ButtonPill primary onClick={handleCreate} disabled={!hasRequiredValue || submitting}>
+          <ButtonPill
+            primary
+            onClick={handleCreate}
+            disabled={!hasRequiredValue || submitting || draftAssistBusy}
+          >
             Guardar en {title.toLowerCase()}
           </ButtonPill>
         </div>
+
+        {draftAssistBusy ? (
+          <p className="mt-3 text-sm text-amber-100">Leyendo y aplicando la ficha...</p>
+        ) : null}
+
+        {!draftAssistBusy && draftAssistMessage ? (
+          <p className="mt-3 text-sm text-stone-300">{draftAssistMessage}</p>
+        ) : null}
       </div>
 
       <div className="mt-6 space-y-4">
@@ -272,7 +363,7 @@ export function EditableSection({
                         <ButtonPill
                           primary
                           onClick={() => handleSaveEdit(item.id)}
-                          disabled={!canSaveEdit || submitting}
+                          disabled={!canSaveEdit || submitting || draftAssistBusy}
                         >
                           <span className="inline-flex items-center gap-2">
                             <Save className="h-4 w-4" />
@@ -283,6 +374,7 @@ export function EditableSection({
                           onClick={() => {
                             setEditingId("");
                             setEditingDraft({});
+                            setDraftAssistMessage("");
                           }}
                         >
                           <span className="inline-flex items-center gap-2">
